@@ -24,11 +24,6 @@ on:
         description: Enterprise workflow run attempt
         required: false
         type: string
-      test_command:
-        description: Shell command that runs the Python orchestration code
-        required: false
-        default: python3 scripts/run-orchestration-test.py
-        type: string
   repository_dispatch:
     types:
       - specmatic-enterprise-jar-ready
@@ -71,7 +66,6 @@ jobs:
 
           values = {
               "SPECMATIC_JAR_URL": pick("jar_url"),
-              "SPECMATIC_TEST_COMMAND": pick("test_command", default="python3 scripts/run-orchestration-test.py"),
               "ENTERPRISE_REPOSITORY": pick("enterprise_repository", default="specmatic/enterprise"),
               "ENTERPRISE_SHA": pick("enterprise_sha"),
               "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),
@@ -110,20 +104,23 @@ jobs:
           fi
 
       - name: Run Python orchestration
+        env:
+          ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.ENTERPRISE_CALLBACK_TOKEN }}
+          ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           mkdir -p "$SPEC_OUTPUTS_DIR" "$SPEC_CONSOLIDATED_DIR"
           export SPECMATIC_JAR_PATH
           export SPECMATIC_JAR_URL
-          export SPECMATIC_SUMMARY_JSON
-          export SPECMATIC_SUMMARY_HTML
           export ENTERPRISE_REPOSITORY
           export ENTERPRISE_SHA
           export ENTERPRISE_RUN_ID
           export ENTERPRISE_RUN_ATTEMPT
           export SPEC_OUTPUTS_DIR
           export SPEC_CONSOLIDATED_DIR
-          bash -lc "$SPECMATIC_TEST_COMMAND"
+          python3 scripts/orchestrate.py
 
       - name: Verify summary files
         if: always()
@@ -140,20 +137,3 @@ jobs:
           path: |
             outputs/**
             consolidated_output/**
-
-      - name: Callback Enterprise
-        if: always()
-        env:
-          ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.ENTERPRISE_CALLBACK_TOKEN }}
-          ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
-          ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
-          ORCHESTRATOR_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ENTERPRISE_CALLBACK_TOKEN:-}" ]; then
-            echo "ENTERPRISE_CALLBACK_TOKEN is not set; skipping Enterprise callback."
-            exit 0
-          fi
-
-          python3 scripts/bridge_to_enterprise.py

@@ -147,6 +147,7 @@ def create_check_run(
     conclusion: str,
     orchestrator_run_url: str,
     summary: dict[str, Any],
+    api_base_url: str,
 ) -> None:
     payload = {
         "name": "Specmatic orchestrator",
@@ -159,7 +160,7 @@ def create_check_run(
             "summary": summary_markdown(summary, conclusion, orchestrator_run_url),
         },
     }
-    github_request("POST", f"https://api.github.com/repos/{repository}/check-runs", token, payload)
+    github_request("POST", f"{api_base_url}/repos/{repository}/check-runs", token, payload)
 
 
 def dispatch_callback(
@@ -173,6 +174,7 @@ def dispatch_callback(
     enterprise_sha: str,
     enterprise_run_id: str | None,
     enterprise_run_attempt: str | None,
+    api_base_url: str,
 ) -> None:
     raw_summary = render_json(summary)
     payload = {
@@ -190,7 +192,7 @@ def dispatch_callback(
             "summary_excerpt": raw_summary[:2000],
         },
     }
-    github_request("POST", f"https://api.github.com/repos/{repository}/dispatches", token, payload)
+    github_request("POST", f"{api_base_url}/repos/{repository}/dispatches", token, payload)
 
 
 def main() -> int:
@@ -206,6 +208,7 @@ def main() -> int:
     orchestrator_run_url = env("ORCHESTRATOR_RUN_URL")
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
+    api_base_url = env("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
 
     print(f"Inferred conclusion: {conclusion}")
     print(f"Enterprise repository: {enterprise_repository}")
@@ -221,6 +224,7 @@ def main() -> int:
             conclusion=conclusion,
             orchestrator_run_url=orchestrator_run_url,
             summary=summary,
+            api_base_url=api_base_url,
         )
         print("Created Enterprise check run.")
     except Exception as exc:
@@ -238,6 +242,7 @@ def main() -> int:
             enterprise_sha=enterprise_sha,
             enterprise_run_id=enterprise_run_id,
             enterprise_run_attempt=enterprise_run_attempt,
+            api_base_url=api_base_url,
         )
         print("Sent Enterprise repository_dispatch callback.")
     except Exception as exc:
