@@ -1,0 +1,31 @@
+    :root {
+      --bg: #0b1220;
+      --panel: #121a2b;
+      --panel-2: #192235;
+      --text: #e8edf7;
+      --muted: #9fb0cc;
+      --good: #2fbf71;
+      --bad: #ff6b6b;
+      --border: #2a3550;
+      --accent: #7cc4ff;
+    }
+    body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: linear-gradient(180deg, #0b1220, #121a2b); color: var(--text); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 48px; }
+    .panel { background: rgba(18,26,43,.92); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 20px; }
+    .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; font-weight: 700; background: var(--panel-2); }
+    .badge.passed { color: #06140d; background: var(--good); }
+    .badge.failed, .badge.clone_failed, .badge.checkout_failed, .badge.missing_repo_url, .badge.no_workflows, .badge.no_test_commands, .badge.command_failed, .badge.setup_failed { color: white; background: var(--bad); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .metric { background: var(--panel-2); border-radius: 10px; padding: 14px; }
+    .metric .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .metric .value { font-size: 24px; font-weight: 700; margin-top: 6px; word-break: break-word; }
+    a { color: var(--accent); text-decoration: none; }
+    ul { margin: 10px 0 0; padding-left: 20px; }
+    code { background: #0f1727; padding: 2px 6px; border-radius: 6px; }
+    .hint { color: var(--muted); margin: 0 0 8px; }
+    details { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+    summary { cursor: pointer; font-weight: 600; }
+    .report-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .report-table th, .report-table td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+    .report-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .report-table tr:last-child td { border-bottom: 0; }

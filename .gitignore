@@ -1,12 +1,13 @@
 outputs/
 consolidated_output/
+temp/
+temp-test*/
 __pycache__/
 *.pyc
 
 # Python
 .venv/
 venv/
-env/
 .python-version
 .pytest_cache/
 .mypy_cache/

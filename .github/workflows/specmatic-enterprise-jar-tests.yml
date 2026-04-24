@@ -27,7 +27,7 @@ on:
       test_command:
         description: Shell command that runs the Python orchestration code
         required: false
-        default: python3 scripts/run_specmatic_tests.py
+        default: python3 scripts/run-orchestration-test.py
         type: string
   repository_dispatch:
     types:
@@ -71,7 +71,7 @@ jobs:
 
           values = {
               "SPECMATIC_JAR_URL": pick("jar_url"),
-              "SPECMATIC_TEST_COMMAND": pick("test_command", default="python3 scripts/run_specmatic_tests.py"),
+              "SPECMATIC_TEST_COMMAND": pick("test_command", default="python3 scripts/run-orchestration-test.py"),
               "ENTERPRISE_REPOSITORY": pick("enterprise_repository", default="specmatic/enterprise"),
               "ENTERPRISE_SHA": pick("enterprise_sha"),
               "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),

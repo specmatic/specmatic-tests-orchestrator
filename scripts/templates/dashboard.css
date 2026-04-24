@@ -1,0 +1,28 @@
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(18,26,43,.92);
+      --panel-2: #192235;
+      --text: #e8edf7;
+      --muted: #9fb0cc;
+      --good: #2fbf71;
+      --bad: #ff6b6b;
+      --border: #2a3550;
+      --accent: #7cc4ff;
+    }
+    body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: radial-gradient(circle at top, #16213b, #0b1220 60%); color: var(--text); }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 20px 48px; }
+    .hero { margin-bottom: 20px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+    .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; font-weight: 700; }
+    .badge.passed { color: #06140d; background: var(--good); }
+    .badge.failed { color: white; background: var(--bad); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+    .metric { background: var(--panel-2); border-radius: 10px; padding: 14px; }
+    .metric .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .metric .value { font-size: 26px; font-weight: 700; margin-top: 6px; word-break: break-word; }
+    .meta { color: var(--muted); line-height: 1.7; }
+    a { color: var(--accent); text-decoration: none; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 10px; }
+    th, td { padding: 14px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { background: #11192a; }
+    tr:hover td { background: rgba(255,255,255,.02); }

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$page_title</title>
+  <style>
+$style_css
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <p><a href="$dashboard_href">Back to dashboard</a></p>
+      <h1>$repo_name</h1>
+      <p><strong>Workflow:</strong> <code>$workflow_name</code></p>
+      <p><span class="badge $workflow_status_class">$workflow_status_label</span></p>
+      <div class="grid">
+        <div class="metric"><div class="label">Branch</div><div class="value">$repo_ref</div></div>
+        <div class="metric"><div class="label">Duration</div><div class="value">$workflow_duration</div></div>
+        <div class="metric"><div class="label">Tests</div><div class="value">$workflow_total_tests</div></div>
+        <div class="metric"><div class="label">Failures</div><div class="value">$workflow_failures</div></div>
+        <div class="metric"><div class="label">Skipped</div><div class="value">$workflow_skipped</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Details</h2>
+      <p><strong>Repository:</strong> <a href="$repo_url">$repo_url</a></p>
+      <p><strong>Exit code:</strong> $workflow_exit_code</p>
+      <p><strong>Notes:</strong> $workflow_details</p>
+      <p><strong>Execution log:</strong> <a href="$workflow_log_href">run.log</a></p>
+    </div>
+    <div class="panel">
+      <h2>Executed Commands</h2>
+      <ul>$command_entries</ul>
+    </div>
+    <div class="panel">
+      <h2>HTML Reports</h2>
+      <p class="hint">Primary report entry points</p>
+      <ul>$html_primary_entries</ul>
+      <details>
+        <summary>All HTML files ($html_file_count)</summary>
+        <ul>$html_entries</ul>
+      </details>
+    </div>
+    <div class="panel">
+      <h2>CTRF Reports</h2>
+      <p class="hint">Parsed CTRF summary from report files</p>
+      <table class="report-table">
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th>File</th>
+            <th>Tests</th>
+            <th>Passed</th>
+            <th>Failed</th>
+            <th>Skipped</th>
+          </tr>
+        </thead>
+        <tbody>
+          $ctrf_summary_rows
+        </tbody>
+      </table>
+      <details>
+        <summary>All CTRF files ($ctrf_file_count)</summary>
+        <ul>$ctrf_entries</ul>
+      </details>
+    </div>
+  </div>
+</body>
+</html>

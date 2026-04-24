@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import json
-import tempfile
+import shutil
 import unittest
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from scripts.consolidate_outputs import load_source_results, write_summary
 
 
+@contextmanager
+def workspace_temp_dir():
+    path = Path.cwd() / "temp" / "unit-tests" / uuid.uuid4().hex
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 class ConsolidateOutputsTest(unittest.TestCase):
     def test_writes_summary_json_and_html_for_multiple_sources(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+        with workspace_temp_dir() as root:
             outputs_dir = root / "outputs"
             consolidated_dir = root / "consolidated_output"
 
@@ -57,8 +68,7 @@ class ConsolidateOutputsTest(unittest.TestCase):
             self.assertEqual([source.name for source in loaded_sources], ["api-tests", "ui-tests"])
 
     def test_summary_marks_failure_when_any_source_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+        with workspace_temp_dir() as root:
             outputs_dir = root / "outputs"
             consolidated_dir = root / "consolidated_output"
 

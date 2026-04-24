@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Orchestration Dashboard</title>
+  <style>
+$style_css
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>Test Orchestration Dashboard</h1>
+      <p><span class="badge $status_class">$overall_status</span></p>
+    </div>
+    <div class="panel">
+      <div class="grid">
+        <div class="metric"><div class="label">Repositories</div><div class="value">$configured</div></div>
+        <div class="metric"><div class="label">Passed Workflows</div><div class="value">$passed</div></div>
+        <div class="metric"><div class="label">Failed Workflows</div><div class="value">$failed</div></div>
+        <div class="metric"><div class="label">Total Tests</div><div class="value">$total_tests</div></div>
+        <div class="metric"><div class="label">Failed Tests</div><div class="value">$failed_tests</div></div>
+        <div class="metric"><div class="label">Skipped Tests</div><div class="value">$skipped_tests</div></div>
+      </div>
+      <p class="meta">
+        Generated at: <code>$generated_at_utc</code>
+      </p>
+    </div>
+    <div class="panel">
+      <h2>Workflows</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Repository</th>
+            <th>Workflow</th>
+            <th>Status</th>
+            <th>Time</th>
+            <th>Failures</th>
+            <th>Tests</th>
+            <th>Skipped</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+$project_rows
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
