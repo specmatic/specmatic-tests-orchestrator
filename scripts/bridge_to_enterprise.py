@@ -217,6 +217,14 @@ def main() -> int:
     errors: list[str] = []
 
     try:
+        print("Check run payload:")
+        print(render_json({
+            "repository": enterprise_repository,
+            "head_sha": enterprise_sha,
+            "conclusion": conclusion,
+            "details_url": orchestrator_run_url,
+            "summary_excerpt": summary_markdown(summary, conclusion, orchestrator_run_url),
+        }))
         create_check_run(
             token=callback_token,
             repository=enterprise_repository,
@@ -231,6 +239,18 @@ def main() -> int:
         errors.append(f"check run: {exc}")
 
     try:
+        callback_payload = {
+            "status": conclusion,
+            "enterprise_sha": enterprise_sha,
+            "enterprise_run_id": enterprise_run_id,
+            "enterprise_run_attempt": enterprise_run_attempt,
+            "orchestrator_run_url": orchestrator_run_url,
+            "orchestrator_run_id": orchestrator_run_id,
+            "orchestrator_run_attempt": orchestrator_run_attempt,
+            "summary_json": render_json(summary),
+        }
+        print("Repository dispatch callback payload:")
+        print(render_json(callback_payload))
         dispatch_callback(
             token=callback_token,
             repository=enterprise_repository,

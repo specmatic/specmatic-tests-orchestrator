@@ -112,11 +112,18 @@ def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path:
 
 def create_demo_source_results(outputs_dir: Path, jar_url: str, jar_path: str, config_path: Path) -> None:
     sources = load_sample_executors(config_path)
+    force_failure = os.environ.get("ORCHESTRATOR_SIMULATE_FAILURE", "").strip().lower() in {"1", "true", "yes", "failure"}
 
     outputs_dir.mkdir(parents=True, exist_ok=True)
     for index, source in enumerate(sources):
         source_type = str(source.get("type", "sample-project"))
         source_name = str(source.get("name") or f"source-{index + 1}")
+        if force_failure and index == 0:
+            source = dict(source)
+            source_result = dict(source.get("result", {})) if isinstance(source.get("result"), dict) else {}
+            source_result.update({"passed": False, "failed_count": max(_to_int(source_result.get("failed_count"), 0), 1)})
+            source_result["passed_count"] = max(_to_int(source_result.get("total"), 1) - source_result["failed_count"], 0)
+            source["result"] = source_result
         source_dir = outputs_dir / f"{source_type}-{source_name}"
         source_dir.mkdir(parents=True, exist_ok=True)
         (source_dir / "result.json").write_text(
@@ -165,6 +172,7 @@ def main() -> int:
             "ENTERPRISE_SHA": enterprise_sha,
             "ENTERPRISE_RUN_ID": enterprise_run_id or "",
             "ENTERPRISE_RUN_ATTEMPT": enterprise_run_attempt or "",
+            "ORCHESTRATOR_SIMULATE_FAILURE": os.environ.get("ORCHESTRATOR_SIMULATE_FAILURE", ""),
         }
     )
 

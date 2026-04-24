@@ -57,6 +57,11 @@ jobs:
           else:
               payload = event.get("inputs", {})
 
+          print("Incoming workflow event:")
+          print(json.dumps(event, indent=2, sort_keys=True))
+          print("Normalized payload:")
+          print(json.dumps(payload, indent=2, sort_keys=True))
+
           def pick(*names: str, default: str = "") -> str:
               for name in names:
                   value = payload.get(name)
@@ -70,6 +75,7 @@ jobs:
               "ENTERPRISE_SHA": pick("enterprise_sha"),
               "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),
               "ENTERPRISE_RUN_ATTEMPT": pick("enterprise_run_attempt"),
+              "ORCHESTRATOR_SIMULATE_FAILURE": pick("simulate_failure", default="false"),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
               "SPECMATIC_SUMMARY_JSON": "consolidated_output/summary.json",
@@ -118,6 +124,7 @@ jobs:
           export ENTERPRISE_SHA
           export ENTERPRISE_RUN_ID
           export ENTERPRISE_RUN_ATTEMPT
+          export ORCHESTRATOR_SIMULATE_FAILURE
           export SPEC_OUTPUTS_DIR
           export SPEC_CONSOLIDATED_DIR
           python3 scripts/orchestrate.py
