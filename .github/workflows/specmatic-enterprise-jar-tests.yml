@@ -105,7 +105,7 @@ jobs:
 
       - name: Run Python orchestration
         env:
-          ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.ENTERPRISE_CALLBACK_TOKEN }}
+          ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.SPECMATIC_GITHUB_TOKEN }}
           ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
           ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
