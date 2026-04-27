@@ -165,6 +165,44 @@ def render_html(summary: dict[str, Any]) -> str:
 """
 
 
+def render_markdown_summary(summary: dict[str, Any], title: str = "Specmatic Consolidated Summary") -> str:
+    passed = str(summary.get("conclusion", "")).strip().lower() in {"success", "neutral", "passed"}
+    marker = "✅" if passed else "❌"
+    rows = [
+        f"# {marker} {title}",
+        "",
+        "## Totals",
+        "",
+        f"- Conclusion: `{summary.get('conclusion', '')}`",
+        f"- Total sources: `{summary.get('total_sources', '')}`",
+        f"- Passed sources: `{summary.get('passed_sources', '')}`",
+        f"- Failed sources: `{summary.get('failed_sources', '')}`",
+        f"- Total tests: `{summary.get('total', '')}`",
+        f"- Passed tests: `{summary.get('passed_count', '')}`",
+        f"- Failed tests: `{summary.get('failed_count', '')}`",
+    ]
+
+    sources = summary.get("sources", [])
+    if isinstance(sources, list) and sources:
+        rows.extend([
+            "",
+            "## Sources",
+            "",
+            "| Name | Status | Passed | Failed | Total |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ])
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            source_name = str(source.get("name", ""))
+            source_passed = bool(source.get("passed", False))
+            rows.append(
+                f"| {source_name} | {'✅ PASS' if source_passed else '❌ FAIL'} | {source.get('passed_count', '')} | {source.get('failed_count', '')} | {source.get('total', '')} |"
+            )
+
+    return "\n".join(rows) + "\n"
+
+
 def write_summary(outputs_dir: Path, consolidated_dir: Path) -> dict[str, Any]:
     consolidated_dir.mkdir(parents=True, exist_ok=True)
     results = load_source_results(outputs_dir)
@@ -176,4 +214,3 @@ def write_summary(outputs_dir: Path, consolidated_dir: Path) -> dict[str, Any]:
     )
     (consolidated_dir / "summary.html").write_text(render_html(summary), encoding="utf-8")
     return summary
-

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.consolidate_outputs import build_summary, load_source_results, write_summary
+from scripts.consolidate_outputs import build_summary, load_source_results, render_markdown_summary, write_summary
 
 DEFAULT_SAMPLE_EXECUTORS = ROOT / "resources" / "test-executor.json"
 FINISH_CALLBACK_EVENT = "specmatic-orchestrator-finished"
@@ -290,6 +290,11 @@ def main() -> int:
                     execution_error = execution_error or str(exc)
     if execution_error:
         print(f"Execution error: {execution_error}")
+
+    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary_path and summary is not None:
+        with Path(step_summary_path).open("a", encoding="utf-8") as handle:
+            handle.write(render_markdown_summary(summary, title="Specmatic Orchestrator Summary"))
 
     print(f"Downloaded jar from: {jar_url}")
     print(f"Used manifest: {sample_config}")
