@@ -34,11 +34,15 @@ class OrchestrateManifestResultsTest(unittest.TestCase):
 
             contract_result = json.loads((outputs_dir / "sample-project-contract-tests" / "result.json").read_text(encoding="utf-8"))
             asyncapi_result = json.loads((outputs_dir / "sample-project-asyncapi-tests" / "result.json").read_text(encoding="utf-8"))
+            ui_result = json.loads((outputs_dir / "playwright-ui-tests" / "result.json").read_text(encoding="utf-8"))
 
             self.assertEqual(contract_result["result_kind"], "happy-path")
             self.assertTrue(contract_result["passed"])
+            self.assertAlmostEqual(contract_result["delay_sec"], 0.03, places=2)
             self.assertEqual(asyncapi_result["result_kind"], "mixed")
             self.assertFalse(asyncapi_result["passed"])
+            self.assertAlmostEqual(asyncapi_result["delay_sec"], 0.11, places=2)
+            self.assertAlmostEqual(ui_result["delay_sec"], 0.17, places=2)
             self.assertEqual(summary["conclusion"], "failure")
             self.assertEqual(summary["failed_sources"], 1)
 

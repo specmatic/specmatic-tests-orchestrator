@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 import urllib.request
 from pathlib import Path
@@ -54,6 +55,19 @@ def _to_int(value: Any, default: int) -> int:
     if isinstance(value, str):
         try:
             return int(float(value))
+        except ValueError:
+            return default
+    return default
+
+
+def _to_float(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
         except ValueError:
             return default
     return default
@@ -133,6 +147,7 @@ def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path:
     passed = _to_bool(result.get("passed"), True)
     passed_count = _to_int(result.get("passed_count"), total if passed else max(total - 1, 0))
     failed_count = _to_int(result.get("failed_count"), max(total - passed_count, 0))
+    delay_sec = _to_float(result.get("delay_sec"), 0.0)
 
     return {
         "source": str(source.get("name") or f"source-{index + 1}"),
@@ -145,6 +160,7 @@ def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path:
         "jar_path": jar_path,
         "description": source.get("description", ""),
         "result_kind": str(result.get("kind", "sample")),
+        "delay_sec": delay_sec,
     }
 
 
@@ -158,6 +174,8 @@ def create_demo_source_results(outputs_dir: Path, jar_url: str, jar_path: str, c
         source_dir = outputs_dir / f"{source_type}-{source_name}"
         source_dir.mkdir(parents=True, exist_ok=True)
         payload = normalize_result(source, index, jar_url, jar_path)
+        if payload["delay_sec"] > 0:
+            time.sleep(payload["delay_sec"])
         (source_dir / "result.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",

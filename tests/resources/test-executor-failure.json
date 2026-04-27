@@ -8,7 +8,8 @@
       "passed": true,
       "total": 12,
       "passed_count": 12,
-      "failed_count": 0
+      "failed_count": 0,
+      "delay_sec": 0.03
     }
   },
   {
@@ -20,7 +21,8 @@
       "passed": false,
       "total": 8,
       "passed_count": 6,
-      "failed_count": 2
+      "failed_count": 2,
+      "delay_sec": 0.11
     }
   },
   {
@@ -32,7 +34,8 @@
       "passed": true,
       "total": 5,
       "passed_count": 5,
-      "failed_count": 0
+      "failed_count": 0,
+      "delay_sec": 0.17
     }
   }
 ]
