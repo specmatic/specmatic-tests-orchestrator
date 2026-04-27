@@ -200,6 +200,15 @@ def render_markdown_summary(summary: dict[str, Any], title: str = "Specmatic Con
                 f"| {source_name} | {'✅ PASS' if source_passed else '❌ FAIL'} | {source.get('passed_count', '')} | {source.get('failed_count', '')} | {source.get('total', '')} |"
             )
 
+    rows.extend([
+        "",
+        "## Raw summary_json",
+        "",
+        "```json",
+        json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False),
+        "```",
+    ])
+
     return "\n".join(rows) + "\n"
 
 
