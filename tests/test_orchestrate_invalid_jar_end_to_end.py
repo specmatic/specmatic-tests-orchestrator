@@ -124,7 +124,11 @@ class OrchestrateInvalidJarEndToEndTest(unittest.TestCase):
                 finished = server.requests[0]
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
                 self.assertEqual(finished["payload"]["client_payload"]["status"], "failure")
-                self.assertIn("Invalid jar", finished["payload"]["client_payload"]["execution_error"])
+                self.assertIn("report", finished["payload"]["client_payload"])
+                self.assertIn(
+                    "Invalid jar",
+                    finished["payload"]["client_payload"]["report"]["execution_error"],
+                )
 
                 self.assertFalse((outputs_dir / "sample-project-contract-tests" / "result.json").exists())
                 self.assertTrue((consolidated_dir / "summary.json").exists())

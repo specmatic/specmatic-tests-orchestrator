@@ -127,7 +127,8 @@ class OrchestrateFailureEndToEndTest(unittest.TestCase):
                 finished = server.requests[0]
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
                 self.assertEqual(finished["payload"]["client_payload"]["status"], "failure")
-                self.assertIn("summary_json", finished["payload"]["client_payload"])
+                self.assertIn("report", finished["payload"]["client_payload"])
+                self.assertIn("summary_json", finished["payload"]["client_payload"]["report"])
                 self.assertEqual(finished["payload"]["client_payload"]["enterprise_check_run_id"], "999")
             finally:
                 server.shutdown()

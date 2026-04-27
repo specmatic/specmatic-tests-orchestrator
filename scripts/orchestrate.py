@@ -52,6 +52,13 @@ def check_run_url(repository: str, check_run_id: str) -> str:
     return f"https://github.com/{repository}/checks/{check_run_id}"
 
 
+def callback_report(summary: dict[str, Any], execution_error: str | None) -> dict[str, Any]:
+    return {
+        "summary_json": json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False),
+        "execution_error": execution_error,
+    }
+
+
 def _to_int(value: Any, default: int) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -289,8 +296,7 @@ def main() -> int:
                             "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
                             "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
                             "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
-                            "summary_json": json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False),
-                            "execution_error": execution_error,
+                            "report": callback_report(summary, execution_error),
                         },
                     )
                     print("Sent final callback.")
