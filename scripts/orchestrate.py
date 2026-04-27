@@ -46,6 +46,12 @@ def pick(payload: dict[str, Any], *names: str, default: str = "") -> str:
     return default
 
 
+def check_run_url(repository: str, check_run_id: str) -> str:
+    if not repository or not check_run_id:
+        return ""
+    return f"https://github.com/{repository}/checks/{check_run_id}"
+
+
 def _to_int(value: Any, default: int) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -221,6 +227,7 @@ def main() -> int:
     enterprise_sha = os.environ.get("ENTERPRISE_SHA") or pick(payload, "enterprise_sha")
     enterprise_run_id = os.environ.get("ENTERPRISE_RUN_ID") or pick(payload, "enterprise_run_id")
     enterprise_run_attempt = os.environ.get("ENTERPRISE_RUN_ATTEMPT") or pick(payload, "enterprise_run_attempt")
+    enterprise_check_run_id = os.environ.get("ENTERPRISE_CHECK_RUN_ID") or pick(payload, "enterprise_check_run_id")
     callback_token = os.environ.get("ENTERPRISE_CALLBACK_TOKEN", "")
     api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     test_executor_path = os.environ.get("ORCHESTRATOR_TEST_EXECUTOR_PATH") or pick(payload, "test_executor_path")
@@ -278,6 +285,7 @@ def main() -> int:
                             "enterprise_sha": enterprise_sha,
                             "enterprise_run_id": enterprise_run_id,
                             "enterprise_run_attempt": enterprise_run_attempt,
+                            "enterprise_check_run_id": enterprise_check_run_id,
                             "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
                             "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
                             "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
@@ -295,6 +303,23 @@ def main() -> int:
     if step_summary_path and summary is not None:
         with Path(step_summary_path).open("a", encoding="utf-8") as handle:
             handle.write(render_markdown_summary(summary, title="Specmatic Orchestrator Summary"))
+            if enterprise_check_run_id:
+                check_url = check_run_url(enterprise_repository, enterprise_check_run_id)
+                if check_url:
+                    handle.write(
+                        "\n".join(
+                            [
+                                "",
+                                "## Final Callback",
+                                "",
+                                f"- Result: {'✅' if summary['conclusion'] == 'success' else '❌'} {summary['conclusion']}",
+                                f"- Check: [Orchestrator Gate]({check_url})",
+                                f"- Enterprise repo: `{enterprise_repository}`",
+                                f"- Enterprise check run id: `{enterprise_check_run_id}`",
+                            ]
+                        )
+                        + "\n"
+                    )
 
     print(f"Downloaded jar from: {jar_url}")
     print(f"Used manifest: {sample_config}")

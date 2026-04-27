@@ -89,6 +89,7 @@ class OrchestrateEndToEndTest(unittest.TestCase):
                             "enterprise_sha": "abc123def456",
                             "enterprise_run_id": "101",
                             "enterprise_run_attempt": "1",
+                            "enterprise_check_run_id": "999",
                         },
                     }
                 ),
@@ -134,6 +135,7 @@ class OrchestrateEndToEndTest(unittest.TestCase):
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
                 self.assertEqual(finished["payload"]["client_payload"]["status"], "success")
                 self.assertIn("summary_json", finished["payload"]["client_payload"])
+                self.assertEqual(finished["payload"]["client_payload"]["enterprise_check_run_id"], "999")
             finally:
                 server.shutdown()
                 server.server_close()
