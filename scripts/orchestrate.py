@@ -5,20 +5,23 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
+import zipfile
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.consolidate_outputs import write_summary
+from scripts.consolidate_outputs import build_summary, load_source_results, write_summary
 
 DEFAULT_SAMPLE_EXECUTORS = ROOT / "resources" / "test-executor.json"
+START_CALLBACK_EVENT = "specmatic-orchestrator-started"
+FINISH_CALLBACK_EVENT = "specmatic-orchestrator-finished"
 
 
 def load_event_payload() -> dict[str, Any]:
@@ -68,8 +71,28 @@ def _to_bool(value: Any, default: bool) -> bool:
 
 def download_jar(jar_url: str, jar_path: Path) -> None:
     jar_path.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(jar_url, timeout=60) as response, jar_path.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+    parsed = urlparse(jar_url)
+    if parsed.scheme in {"http", "https"}:
+        with urllib.request.urlopen(jar_url, timeout=60) as response, jar_path.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+        return
+
+    source = Path(unquote(parsed.path if parsed.scheme == "file" else jar_url)).expanduser()
+    if not source.exists():
+        raise FileNotFoundError(f"Jar not found: {source}")
+    shutil.copyfile(source, jar_path)
+
+
+def validate_jar(jar_path: Path) -> None:
+    if not jar_path.exists():
+        raise FileNotFoundError(f"Jar not found: {jar_path}")
+    if jar_path.stat().st_size <= 0:
+        raise ValueError(f"Jar is empty: {jar_path}")
+    if not zipfile.is_zipfile(jar_path):
+        raise ValueError(f"Invalid jar file (not a ZIP archive): {jar_path}")
+    with zipfile.ZipFile(jar_path) as jar:
+        if not jar.namelist():
+            raise ValueError(f"Invalid jar file (no entries found): {jar_path}")
 
 
 def load_sample_executors(config_path: Path) -> list[dict[str, Any]]:
@@ -84,6 +107,21 @@ def load_sample_executors(config_path: Path) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, dict)]
+
+
+def resolve_sample_config_path(raw_path: str | None) -> Path:
+    if not raw_path:
+        return DEFAULT_SAMPLE_EXECUTORS
+
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = (ROOT / candidate).resolve()
+
+    if not candidate.exists():
+        raise FileNotFoundError(f"Test executor manifest not found: {raw_path} (resolved to {candidate})")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Test executor manifest is not a file: {raw_path} (resolved to {candidate})")
+    return candidate
 
 
 def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path: str) -> dict[str, Any]:
@@ -112,24 +150,50 @@ def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path:
 
 def create_demo_source_results(outputs_dir: Path, jar_url: str, jar_path: str, config_path: Path) -> None:
     sources = load_sample_executors(config_path)
-    force_failure = os.environ.get("ORCHESTRATOR_SIMULATE_FAILURE", "").strip().lower() in {"1", "true", "yes", "failure"}
-
     outputs_dir.mkdir(parents=True, exist_ok=True)
+
     for index, source in enumerate(sources):
         source_type = str(source.get("type", "sample-project"))
         source_name = str(source.get("name") or f"source-{index + 1}")
-        if force_failure and index == 0:
-            source = dict(source)
-            source_result = dict(source.get("result", {})) if isinstance(source.get("result"), dict) else {}
-            source_result.update({"passed": False, "failed_count": max(_to_int(source_result.get("failed_count"), 0), 1)})
-            source_result["passed_count"] = max(_to_int(source_result.get("total"), 1) - source_result["failed_count"], 0)
-            source["result"] = source_result
         source_dir = outputs_dir / f"{source_type}-{source_name}"
         source_dir.mkdir(parents=True, exist_ok=True)
+        payload = normalize_result(source, index, jar_url, jar_path)
         (source_dir / "result.json").write_text(
-            json.dumps(normalize_result(source, index, jar_url, jar_path), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
+
+
+def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method)
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("Content-Type", "application/json")
+
+    with urllib.request.urlopen(request, timeout=60) as response:
+        response_body = response.read().decode("utf-8")
+        return json.loads(response_body) if response_body else {}
+
+
+def send_repository_dispatch(
+    *,
+    token: str,
+    repository: str,
+    api_base_url: str,
+    event_type: str,
+    client_payload: dict[str, Any],
+) -> None:
+    github_request(
+        "POST",
+        f"{api_base_url}/repos/{repository}/dispatches",
+        token,
+        {
+            "event_type": event_type,
+            "client_payload": client_payload,
+        },
+    )
 
 
 def main() -> int:
@@ -140,6 +204,9 @@ def main() -> int:
     enterprise_sha = os.environ.get("ENTERPRISE_SHA") or pick(payload, "enterprise_sha")
     enterprise_run_id = os.environ.get("ENTERPRISE_RUN_ID") or pick(payload, "enterprise_run_id")
     enterprise_run_attempt = os.environ.get("ENTERPRISE_RUN_ATTEMPT") or pick(payload, "enterprise_run_attempt")
+    callback_token = os.environ.get("ENTERPRISE_CALLBACK_TOKEN", "")
+    api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+    test_executor_path = os.environ.get("ORCHESTRATOR_TEST_EXECUTOR_PATH") or pick(payload, "test_executor_path")
 
     if not jar_url:
         raise SystemExit("SPECMATIC_JAR_URL or event payload jar_url is required")
@@ -150,34 +217,93 @@ def main() -> int:
 
     outputs_dir = Path(os.environ.get("SPEC_OUTPUTS_DIR", "outputs"))
     consolidated_dir = Path(os.environ.get("SPEC_CONSOLIDATED_DIR", "consolidated_output"))
-    sample_config = Path(os.environ.get("ORCHESTRATOR_SAMPLE_CONFIG", DEFAULT_SAMPLE_EXECUTORS))
+
+    summary: dict[str, Any] | None = None
+    execution_error: str | None = None
 
     with tempfile.TemporaryDirectory(prefix="specmatic-") as temp_dir:
         jar_path = Path(temp_dir) / "enterprise.jar"
-        download_jar(jar_url, jar_path)
+        try:
+            sample_config = resolve_sample_config_path(test_executor_path)
+            download_jar(jar_url, jar_path)
+            validate_jar(jar_path)
+            if callback_token:
+                send_repository_dispatch(
+                    token=callback_token,
+                    repository=enterprise_repository,
+                    api_base_url=api_base_url,
+                    event_type=START_CALLBACK_EVENT,
+                    client_payload={
+                        "status": "in_progress",
+                        "phase": "starting",
+                        "enterprise_sha": enterprise_sha,
+                        "enterprise_run_id": enterprise_run_id,
+                        "enterprise_run_attempt": enterprise_run_attempt,
+                        "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
+                        "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
+                        "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
+                        "jar_url": jar_url,
+                    },
+                )
+                print("Sent start callback.")
 
-        create_demo_source_results(outputs_dir, jar_url=jar_url, jar_path=str(jar_path), config_path=sample_config)
-        summary = write_summary(outputs_dir=outputs_dir, consolidated_dir=consolidated_dir)
+            create_demo_source_results(outputs_dir, jar_url=jar_url, jar_path=str(jar_path), config_path=sample_config)
+            summary = write_summary(outputs_dir=outputs_dir, consolidated_dir=consolidated_dir)
+        except Exception as exc:
+            execution_error = str(exc)
+            consolidated_dir.mkdir(parents=True, exist_ok=True)
+            partial_results = load_source_results(outputs_dir)
+            summary = build_summary(partial_results)
+            summary["conclusion"] = "failure"
+            summary["status"] = "failure"
+            summary["execution_error"] = execution_error
+            summary["tests_skipped"] = True
+            (consolidated_dir / "summary.json").write_text(
+                json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (consolidated_dir / "summary.html").write_text(
+                f"<html><body><h1>Failed before summary generation</h1><pre>{execution_error}</pre></body></html>",
+                encoding="utf-8",
+            )
+        finally:
+            assert summary is not None
+            if callback_token:
+                try:
+                    send_repository_dispatch(
+                        token=callback_token,
+                        repository=enterprise_repository,
+                        api_base_url=api_base_url,
+                        event_type=FINISH_CALLBACK_EVENT,
+                        client_payload={
+                            "status": summary["conclusion"],
+                            "phase": "completed",
+                            "enterprise_sha": enterprise_sha,
+                            "enterprise_run_id": enterprise_run_id,
+                            "enterprise_run_attempt": enterprise_run_attempt,
+                            "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
+                            "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
+                            "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
+                            "summary_json": json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False),
+                            "execution_error": execution_error,
+                        },
+                    )
+                    print("Sent final callback.")
+                except Exception as exc:
+                    execution_error = execution_error or str(exc)
+    if execution_error:
+        print(f"Execution error: {execution_error}")
 
     print(f"Downloaded jar from: {jar_url}")
+    print(f"Used manifest: {sample_config}")
     print(f"Wrote source outputs to: {outputs_dir}")
     print(f"Wrote consolidated summary to: {consolidated_dir}")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if summary is not None:
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "SPECMATIC_SUMMARY_JSON": str(consolidated_dir / "summary.json"),
-            "ENTERPRISE_REPOSITORY": enterprise_repository,
-            "ENTERPRISE_SHA": enterprise_sha,
-            "ENTERPRISE_RUN_ID": enterprise_run_id or "",
-            "ENTERPRISE_RUN_ATTEMPT": enterprise_run_attempt or "",
-            "ORCHESTRATOR_SIMULATE_FAILURE": os.environ.get("ORCHESTRATOR_SIMULATE_FAILURE", ""),
-        }
-    )
-
-    subprocess.run([sys.executable, "scripts/bridge_to_enterprise.py"], cwd=ROOT, env=env, check=True)
-    return 0 if summary["failed_sources"] == 0 else 1
+    if execution_error:
+        return 1
+    return 0 if summary and summary["failed_sources"] == 0 else 1
 
 
 if __name__ == "__main__":

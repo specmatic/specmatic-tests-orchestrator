@@ -12,6 +12,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.jar_fixture import build_minimal_jar_bytes
 
 class _DemoServer(HTTPServer):
     def __init__(self, server_address: tuple[str, int]) -> None:
@@ -23,7 +28,7 @@ class _DemoServer(HTTPServer):
 class _DemoHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/enterprise.jar":
-            body = b"fake jar bytes"
+            body = build_minimal_jar_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "application/java-archive")
             self.send_header("Content-Length", str(len(body)))
@@ -62,7 +67,7 @@ class _DemoHandler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = ROOT
 
     with tempfile.TemporaryDirectory(prefix="specmatic-demo-") as temp_dir:
         temp_path = Path(temp_dir)

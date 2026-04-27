@@ -14,14 +14,14 @@ from typing import Any
 from scripts.jar_fixture import build_minimal_jar_bytes
 
 
-class _OrchestratorServer(HTTPServer):
+class _FailureServer(HTTPServer):
     def __init__(self, server_address: tuple[str, int]) -> None:
-        super().__init__(server_address, _OrchestratorHandler)
+        super().__init__(server_address, _FailureHandler)
         self.requests: list[dict[str, Any]] = []
         self.event = threading.Event()
 
 
-class _OrchestratorHandler(BaseHTTPRequestHandler):
+class _FailureHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/enterprise.jar":
             body = build_minimal_jar_bytes()
@@ -46,7 +46,6 @@ class _OrchestratorHandler(BaseHTTPRequestHandler):
         self.server.requests.append(  # type: ignore[attr-defined]
             {
                 "path": self.path,
-                "headers": dict(self.headers),
                 "payload": payload,
             }
         )
@@ -63,8 +62,8 @@ class _OrchestratorHandler(BaseHTTPRequestHandler):
         return
 
 
-class OrchestrateEndToEndTest(unittest.TestCase):
-    def test_receives_trigger_runs_test_and_sends_callback(self) -> None:
+class OrchestrateFailureEndToEndTest(unittest.TestCase):
+    def test_failure_manifest_drives_failure_callback(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -73,7 +72,7 @@ class OrchestrateEndToEndTest(unittest.TestCase):
             outputs_dir = temp_path / "outputs"
             consolidated_dir = temp_path / "consolidated_output"
 
-            server = _OrchestratorServer(("127.0.0.1", 0))
+            server = _FailureServer(("127.0.0.1", 0))
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -102,7 +101,7 @@ class OrchestrateEndToEndTest(unittest.TestCase):
                     "GITHUB_EVENT_PATH": str(event_path),
                     "ENTERPRISE_CALLBACK_TOKEN": "dummy-token",
                     "GITHUB_API_BASE_URL": f"http://127.0.0.1:{port}",
-                    "ORCHESTRATOR_TEST_EXECUTOR_PATH": str(repo_root / "tests" / "resources" / "test-executor-success.json"),
+                    "ORCHESTRATOR_TEST_EXECUTOR_PATH": str(repo_root / "tests" / "resources" / "test-executor-failure.json"),
                     "SPEC_OUTPUTS_DIR": str(outputs_dir),
                     "SPEC_CONSOLIDATED_DIR": str(consolidated_dir),
                     "ORCHESTRATOR_RUN_URL": "http://example.local/orchestrator/run/1",
@@ -112,31 +111,21 @@ class OrchestrateEndToEndTest(unittest.TestCase):
             )
 
             try:
-                subprocess.run(
+                result = subprocess.run(
                     [sys.executable, "scripts/orchestrate.py"],
                     cwd=repo_root,
                     env=env,
-                    check=True,
                     capture_output=True,
                     text=True,
                 )
 
+                self.assertNotEqual(result.returncode, 0, result.stdout + "\n" + result.stderr)
                 self.assertTrue(server.event.wait(5), "timed out waiting for callback POSTs")
                 self.assertEqual(len(server.requests), 2)
 
-                self.assertTrue((outputs_dir / "sample-project-contract-tests" / "result.json").exists())
-                self.assertTrue((outputs_dir / "sample-project-asyncapi-tests" / "result.json").exists())
-                self.assertTrue((outputs_dir / "playwright-ui-tests" / "result.json").exists())
-                self.assertTrue((consolidated_dir / "summary.json").exists())
-                self.assertTrue((consolidated_dir / "summary.html").exists())
-
-                started = next(request for request in server.requests if request["payload"]["client_payload"]["phase"] == "starting")
                 finished = next(request for request in server.requests if request["payload"]["client_payload"]["phase"] == "completed")
-
-                self.assertEqual(started["payload"]["event_type"], "specmatic-orchestrator-started")
-                self.assertEqual(started["payload"]["client_payload"]["status"], "in_progress")
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
-                self.assertEqual(finished["payload"]["client_payload"]["status"], "success")
+                self.assertEqual(finished["payload"]["client_payload"]["status"], "failure")
                 self.assertIn("summary_json", finished["payload"]["client_payload"])
             finally:
                 server.shutdown()

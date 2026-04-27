@@ -89,6 +89,7 @@ class BridgeCallbackTest(unittest.TestCase):
                     "ORCHESTRATOR_RUN_ID": "202",
                     "ORCHESTRATOR_RUN_ATTEMPT": "1",
                     "GITHUB_API_BASE_URL": f"http://127.0.0.1:{port}",
+                    "ENABLE_CHECK_RUNS": "true",
                 }
             )
 

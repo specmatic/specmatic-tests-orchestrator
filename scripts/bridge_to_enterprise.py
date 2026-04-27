@@ -209,6 +209,7 @@ def main() -> int:
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
     api_base_url = env("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+    enable_check_runs = env("ENABLE_CHECK_RUNS", "false").strip().lower() in {"1", "true", "yes"}
 
     print(f"Inferred conclusion: {conclusion}")
     print(f"Enterprise repository: {enterprise_repository}")
@@ -216,27 +217,30 @@ def main() -> int:
 
     errors: list[str] = []
 
-    try:
-        print("Check run payload:")
-        print(render_json({
-            "repository": enterprise_repository,
-            "head_sha": enterprise_sha,
-            "conclusion": conclusion,
-            "details_url": orchestrator_run_url,
-            "summary_excerpt": summary_markdown(summary, conclusion, orchestrator_run_url),
-        }))
-        create_check_run(
-            token=callback_token,
-            repository=enterprise_repository,
-            head_sha=enterprise_sha,
-            conclusion=conclusion,
-            orchestrator_run_url=orchestrator_run_url,
-            summary=summary,
-            api_base_url=api_base_url,
-        )
-        print("Created Enterprise check run.")
-    except Exception as exc:
-        errors.append(f"check run: {exc}")
+    if enable_check_runs:
+        try:
+            print("Check run payload:")
+            print(render_json({
+                "repository": enterprise_repository,
+                "head_sha": enterprise_sha,
+                "conclusion": conclusion,
+                "details_url": orchestrator_run_url,
+                "summary_excerpt": summary_markdown(summary, conclusion, orchestrator_run_url),
+            }))
+            create_check_run(
+                token=callback_token,
+                repository=enterprise_repository,
+                head_sha=enterprise_sha,
+                conclusion=conclusion,
+                orchestrator_run_url=orchestrator_run_url,
+                summary=summary,
+                api_base_url=api_base_url,
+            )
+            print("Created Enterprise check run.")
+        except Exception as exc:
+            errors.append(f"check run: {exc}")
+    else:
+        print("Skipping check run creation.")
 
     try:
         callback_payload = {
