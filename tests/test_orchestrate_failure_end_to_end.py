@@ -55,7 +55,7 @@ class _FailureHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"{}")
 
-        if len(self.server.requests) >= 2:  # type: ignore[attr-defined]
+        if len(self.server.requests) >= 1:  # type: ignore[attr-defined]
             self.server.event.set()  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
@@ -120,10 +120,10 @@ class OrchestrateFailureEndToEndTest(unittest.TestCase):
                 )
 
                 self.assertNotEqual(result.returncode, 0, result.stdout + "\n" + result.stderr)
-                self.assertTrue(server.event.wait(5), "timed out waiting for callback POSTs")
-                self.assertEqual(len(server.requests), 2)
+                self.assertTrue(server.event.wait(5), "timed out waiting for callback POST")
+                self.assertEqual(len(server.requests), 1)
 
-                finished = next(request for request in server.requests if request["payload"]["client_payload"]["phase"] == "completed")
+                finished = server.requests[0]
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
                 self.assertEqual(finished["payload"]["client_payload"]["status"], "failure")
                 self.assertIn("summary_json", finished["payload"]["client_payload"])

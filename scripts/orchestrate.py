@@ -21,7 +21,6 @@ if str(ROOT) not in sys.path:
 from scripts.consolidate_outputs import build_summary, load_source_results, write_summary
 
 DEFAULT_SAMPLE_EXECUTORS = ROOT / "resources" / "test-executor.json"
-START_CALLBACK_EVENT = "specmatic-orchestrator-started"
 FINISH_CALLBACK_EVENT = "specmatic-orchestrator-finished"
 
 
@@ -245,26 +244,6 @@ def main() -> int:
             sample_config = resolve_sample_config_path(test_executor_path)
             download_jar(jar_url, jar_path)
             validate_jar(jar_path)
-            if callback_token:
-                send_repository_dispatch(
-                    token=callback_token,
-                    repository=enterprise_repository,
-                    api_base_url=api_base_url,
-                    event_type=START_CALLBACK_EVENT,
-                    client_payload={
-                        "status": "in_progress",
-                        "phase": "starting",
-                        "enterprise_sha": enterprise_sha,
-                        "enterprise_run_id": enterprise_run_id,
-                        "enterprise_run_attempt": enterprise_run_attempt,
-                        "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
-                        "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
-                        "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
-                        "jar_url": jar_url,
-                    },
-                )
-                print("Sent start callback.")
-
             create_demo_source_results(outputs_dir, jar_url=jar_url, jar_path=str(jar_path), config_path=sample_config)
             summary = write_summary(outputs_dir=outputs_dir, consolidated_dir=consolidated_dir)
         except Exception as exc:

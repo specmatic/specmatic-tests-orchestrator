@@ -8,8 +8,7 @@ It is designed to:
 2. Download that jar into the workflow runner.
 3. Run the Python orchestration script that produces per-source outputs.
 4. Collect `summary.json` and `summary.html`.
-5. Send an in-progress callback when tests start.
-6. Send a final callback with the pass/fail result and summary JSON when tests finish.
+5. Send a final callback with the pass/fail result and summary JSON when tests finish.
 
 ## Workflow contract
 
@@ -46,12 +45,10 @@ flowchart LR
   D -->|write per-source results| E["outputs/<source>/result.json"]
   D -->|merge results| F["consolidated_output/summary.json"]
   D -->|render HTML summary| G["consolidated_output/summary.html"]
-  D -->|in-progress callback| H["repository_dispatch: specmatic-orchestrator-started"]
   D -->|final callback + summary JSON| I["repository_dispatch: specmatic-orchestrator-finished"]
   G -->|uploaded artifact| K["GitHub Actions artifact"]
   E -->|uploaded artifact| K
-  H -->|status=in_progress| J["specmatic/orchestrator-tester"]
-  I -->|status=success/failure + summary| J
+  I -->|status=success/failure + summary| J["specmatic/orchestrator-tester"]
 ```
 
 ### Dry-Run Flow

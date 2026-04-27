@@ -59,7 +59,7 @@ class _DemoHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"{}")
 
-        if len(self.server.requests) >= 2:  # type: ignore[attr-defined]
+        if len(self.server.requests) >= 1:  # type: ignore[attr-defined]
             self.server.event.set()  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003

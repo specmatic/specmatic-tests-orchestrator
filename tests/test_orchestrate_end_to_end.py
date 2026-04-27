@@ -56,7 +56,7 @@ class _OrchestratorHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"{}")
 
-        if len(self.server.requests) >= 2:  # type: ignore[attr-defined]
+        if len(self.server.requests) >= 1:  # type: ignore[attr-defined]
             self.server.event.set()  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
@@ -121,8 +121,8 @@ class OrchestrateEndToEndTest(unittest.TestCase):
                     text=True,
                 )
 
-                self.assertTrue(server.event.wait(5), "timed out waiting for callback POSTs")
-                self.assertEqual(len(server.requests), 2)
+                self.assertTrue(server.event.wait(5), "timed out waiting for callback POST")
+                self.assertEqual(len(server.requests), 1)
 
                 self.assertTrue((outputs_dir / "sample-project-contract-tests" / "result.json").exists())
                 self.assertTrue((outputs_dir / "sample-project-asyncapi-tests" / "result.json").exists())
@@ -130,11 +130,7 @@ class OrchestrateEndToEndTest(unittest.TestCase):
                 self.assertTrue((consolidated_dir / "summary.json").exists())
                 self.assertTrue((consolidated_dir / "summary.html").exists())
 
-                started = next(request for request in server.requests if request["payload"]["client_payload"]["phase"] == "starting")
-                finished = next(request for request in server.requests if request["payload"]["client_payload"]["phase"] == "completed")
-
-                self.assertEqual(started["payload"]["event_type"], "specmatic-orchestrator-started")
-                self.assertEqual(started["payload"]["client_payload"]["status"], "in_progress")
+                finished = server.requests[0]
                 self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
                 self.assertEqual(finished["payload"]["client_payload"]["status"], "success")
                 self.assertIn("summary_json", finished["payload"]["client_payload"])
