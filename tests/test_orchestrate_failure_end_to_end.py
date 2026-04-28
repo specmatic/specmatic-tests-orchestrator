@@ -35,7 +35,7 @@ class _FailureHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_PATCH(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         try:
@@ -45,6 +45,7 @@ class _FailureHandler(BaseHTTPRequestHandler):
 
         self.server.requests.append(  # type: ignore[attr-defined]
             {
+                "method": "PATCH",
                 "path": self.path,
                 "payload": payload,
             }
@@ -57,6 +58,10 @@ class _FailureHandler(BaseHTTPRequestHandler):
 
         if len(self.server.requests) >= 1:  # type: ignore[attr-defined]
             self.server.event.set()  # type: ignore[attr-defined]
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.send_response(405)
+        self.end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
@@ -121,15 +126,15 @@ class OrchestrateFailureEndToEndTest(unittest.TestCase):
                 )
 
                 self.assertNotEqual(result.returncode, 0, result.stdout + "\n" + result.stderr)
-                self.assertTrue(server.event.wait(5), "timed out waiting for callback POST")
+                self.assertTrue(server.event.wait(5), "timed out waiting for check-run PATCH")
                 self.assertEqual(len(server.requests), 1)
 
                 finished = server.requests[0]
-                self.assertEqual(finished["payload"]["event_type"], "specmatic-orchestrator-finished")
-                self.assertEqual(finished["payload"]["client_payload"]["status"], "failure")
-                self.assertIn("report", finished["payload"]["client_payload"])
-                self.assertIn("summary_json", finished["payload"]["client_payload"]["report"])
-                self.assertEqual(finished["payload"]["client_payload"]["enterprise_check_run_id"], "999")
+                self.assertEqual(finished["method"], "PATCH")
+                self.assertTrue(finished["path"].endswith("/check-runs/999"))
+                self.assertEqual(finished["payload"]["status"], "completed")
+                self.assertEqual(finished["payload"]["conclusion"], "failure")
+                self.assertIn("Orchestrator Gate for run 101 attempt 1", finished["payload"]["output"]["title"])
             finally:
                 server.shutdown()
                 server.server_close()

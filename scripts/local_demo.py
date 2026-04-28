@@ -39,7 +39,7 @@ class _DemoHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_PATCH(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         try:
@@ -49,6 +49,7 @@ class _DemoHandler(BaseHTTPRequestHandler):
 
         self.server.requests.append(  # type: ignore[attr-defined]
             {
+                "method": "PATCH",
                 "path": self.path,
                 "payload": payload,
             }
@@ -61,6 +62,10 @@ class _DemoHandler(BaseHTTPRequestHandler):
 
         if len(self.server.requests) >= 1:  # type: ignore[attr-defined]
             self.server.event.set()  # type: ignore[attr-defined]
+
+    def do_POST(self) -> None:  # noqa: N802
+        self.send_response(405)
+        self.end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
@@ -92,6 +97,7 @@ def main() -> int:
                             "enterprise_sha": "abc123def456",
                             "enterprise_run_id": "101",
                             "enterprise_run_attempt": "1",
+                            "enterprise_check_run_id": "999",
                         },
                     }
                 ),
@@ -121,7 +127,7 @@ def main() -> int:
             )
 
             if not server.event.wait(5):
-                raise SystemExit("Timed out waiting for callback POSTs")
+                raise SystemExit("Timed out waiting for check-run PATCH")
 
             print(f"Outputs written to: {outputs_dir}")
             print(f"Consolidated report written to: {consolidated_dir}")

@@ -21,7 +21,6 @@ if str(ROOT) not in sys.path:
 from scripts.consolidate_outputs import build_summary, load_source_results, render_markdown_summary, write_summary
 
 DEFAULT_SAMPLE_EXECUTORS = ROOT / "resources" / "test-executor.json"
-FINISH_CALLBACK_EVENT = "specmatic-orchestrator-finished"
 
 
 def load_event_payload() -> dict[str, Any]:
@@ -52,11 +51,36 @@ def check_run_url(repository: str, check_run_id: str) -> str:
     return f"https://github.com/{repository}/checks/{check_run_id}"
 
 
-def callback_report(summary: dict[str, Any], execution_error: str | None) -> dict[str, Any]:
-    return {
-        "summary_json": json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False),
-        "execution_error": execution_error,
-    }
+def update_check_run(
+    token: str,
+    repository: str,
+    check_run_id: str,
+    conclusion: str,
+    orchestrator_run_url: str,
+    summary: dict[str, Any],
+    api_base_url: str,
+    enterprise_run_id: str | None,
+    enterprise_run_attempt: str | None,
+) -> dict[str, Any]:
+    run_id = enterprise_run_id or "unknown"
+    run_attempt = enterprise_run_attempt or "unknown"
+    return github_request(
+        "PATCH",
+        f"{api_base_url}/repos/{repository}/check-runs/{check_run_id}",
+        token,
+        {
+            "status": "completed",
+            "conclusion": conclusion,
+            "details_url": orchestrator_run_url,
+            "output": {
+                "title": f"Orchestrator Gate for run {run_id} attempt {run_attempt}",
+                "summary": render_markdown_summary(
+                    summary,
+                    title=f"Specmatic Orchestrator Summary for run {run_id} attempt {run_attempt}",
+                ),
+            },
+        },
+    )
 
 
 def _to_int(value: Any, default: int) -> int:
@@ -207,25 +231,6 @@ def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -
         return json.loads(response_body) if response_body else {}
 
 
-def send_repository_dispatch(
-    *,
-    token: str,
-    repository: str,
-    api_base_url: str,
-    event_type: str,
-    client_payload: dict[str, Any],
-) -> None:
-    github_request(
-        "POST",
-        f"{api_base_url}/repos/{repository}/dispatches",
-        token,
-        {
-            "event_type": event_type,
-            "client_payload": client_payload,
-        },
-    )
-
-
 def main() -> int:
     payload = load_event_payload()
 
@@ -281,25 +286,19 @@ def main() -> int:
             assert summary is not None
             if callback_token:
                 try:
-                    send_repository_dispatch(
+                    check_run_response = update_check_run(
                         token=callback_token,
                         repository=enterprise_repository,
+                        check_run_id=enterprise_check_run_id,
+                        conclusion=summary["conclusion"],
+                        orchestrator_run_url=os.environ.get("ORCHESTRATOR_RUN_URL", ""),
+                        summary=summary,
                         api_base_url=api_base_url,
-                        event_type=FINISH_CALLBACK_EVENT,
-                        client_payload={
-                            "status": summary["conclusion"],
-                            "phase": "completed",
-                            "enterprise_sha": enterprise_sha,
-                            "enterprise_run_id": enterprise_run_id,
-                            "enterprise_run_attempt": enterprise_run_attempt,
-                            "enterprise_check_run_id": enterprise_check_run_id,
-                            "orchestrator_run_url": os.environ.get("ORCHESTRATOR_RUN_URL", ""),
-                            "orchestrator_run_id": os.environ.get("ORCHESTRATOR_RUN_ID", ""),
-                            "orchestrator_run_attempt": os.environ.get("ORCHESTRATOR_RUN_ATTEMPT", ""),
-                            "report": callback_report(summary, execution_error),
-                        },
+                        enterprise_run_id=enterprise_run_id,
+                        enterprise_run_attempt=enterprise_run_attempt,
                     )
-                    print("Sent final callback.")
+                    print("Updated pending check run.")
+                    print(json.dumps(check_run_response, indent=2, sort_keys=True))
                 except Exception as exc:
                     execution_error = execution_error or str(exc)
     if execution_error:
