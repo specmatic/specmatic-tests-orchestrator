@@ -9,7 +9,7 @@
       "total": 12,
       "passed_count": 12,
       "failed_count": 0,
-      "delay_sec": 0.05
+      "delay_sec": 5
     }
   },
   {
@@ -22,7 +22,7 @@
       "total": 8,
       "passed_count": 8,
       "failed_count": 0,
-      "delay_sec": 0.12
+      "delay_sec": 20
     }
   },
   {
@@ -35,7 +35,7 @@
       "total": 5,
       "passed_count": 5,
       "failed_count": 0,
-      "delay_sec": 0.18
+      "delay_sec": 30
     }
   }
 ]
