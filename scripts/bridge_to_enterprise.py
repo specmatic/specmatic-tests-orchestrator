@@ -96,11 +96,11 @@ def infer_conclusion(summary: dict[str, Any]) -> str:
 def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
     raw_summary = render_json(summary)
     excerpt = raw_summary if len(raw_summary) <= 3500 else raw_summary[:3450] + "\n... truncated for display ..."
-    total = pick_first(summary, ["total", "total_count", "tests_total", "num_tests"])
+    total = pick_first(summary, ["total_tests", "total", "total_count", "tests_total", "num_tests"])
     passed = pick_first(summary, ["passed", "passed_count", "success_count", "successful_count"])
-    failed = pick_first(summary, ["failed", "failed_count", "failures", "error_count"])
-    skipped = pick_first(summary, ["skipped", "skipped_count"])
-    duration = pick_first(summary, ["duration", "elapsed", "elapsed_seconds", "runtime_seconds"])
+    failed = pick_first(summary, ["failed_tests", "failed", "failed_count", "failures", "error_count"])
+    skipped = pick_first(summary, ["skipped_tests", "skipped", "skipped_count"])
+    duration = pick_first(summary, ["duration_seconds", "duration", "elapsed", "elapsed_seconds", "runtime_seconds"])
 
     rows = [
         ("Conclusion", conclusion),
@@ -123,6 +123,17 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
     return "\n".join(body)
 
 
+def append_workflow_summary(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> None:
+    step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not step_summary_path:
+        return
+
+    with Path(step_summary_path).open("a", encoding="utf-8") as handle:
+        handle.write("## Specmatic Orchestration Result\n\n")
+        handle.write(summary_markdown(summary, conclusion, orchestrator_run_url))
+        handle.write("\n")
+
+
 def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, method=method)
@@ -138,6 +149,33 @@ def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def status_context(run_id: str | None, run_attempt: str | None) -> str:
+    return f"Orchestrator Gate for run {run_id or 'unknown'} attempt {run_attempt or 'unknown'}"
+
+
+def update_commit_status(
+    token: str,
+    repository: str,
+    sha: str,
+    state: str,
+    orchestrator_run_url: str,
+    description: str,
+    api_base_url: str,
+    context: str,
+) -> None:
+    github_request(
+        "POST",
+        f"{api_base_url}/repos/{repository}/statuses/{sha}",
+        token,
+        {
+            "state": state,
+            "target_url": orchestrator_run_url,
+            "description": description[:140],
+            "context": context,
+        },
+    )
 
 
 def create_check_run(
@@ -213,13 +251,38 @@ def main() -> int:
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
     api_base_url = env("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+    enterprise_status_context = os.environ.get("ENTERPRISE_STATUS_CONTEXT") or status_context(
+        enterprise_run_id,
+        enterprise_run_attempt,
+    )
     enable_check_runs = env("ENABLE_CHECK_RUNS", "false").strip().lower() in {"1", "true", "yes"}
+    enable_repository_dispatch = env("ENABLE_REPOSITORY_DISPATCH_CALLBACK", "false").strip().lower() in {"1", "true", "yes"}
 
     print(f"Inferred conclusion: {conclusion}")
     print(f"Enterprise repository: {enterprise_repository}")
     print(f"Enterprise SHA: {enterprise_sha}")
+    append_workflow_summary(summary, conclusion, orchestrator_run_url)
 
     errors: list[str] = []
+
+    try:
+        update_commit_status(
+            token=callback_token,
+            repository=enterprise_repository,
+            sha=enterprise_sha,
+            state="success" if conclusion in {"success", "neutral"} else "failure",
+            orchestrator_run_url=orchestrator_run_url,
+            description=(
+                "Specmatic orchestrator completed successfully"
+                if conclusion in {"success", "neutral"}
+                else "Specmatic orchestrator completed with failures"
+            ),
+            api_base_url=api_base_url,
+            context=enterprise_status_context,
+        )
+        print("Updated Enterprise commit status.")
+    except Exception as exc:
+        errors.append(f"commit status: {exc}")
 
     if enable_check_runs:
         try:
@@ -248,41 +311,44 @@ def main() -> int:
     else:
         print("Skipping check run creation.")
 
-    try:
-        callback_payload = {
-            "status": conclusion,
-            "enterprise_sha": enterprise_sha,
-            "enterprise_run_id": enterprise_run_id,
-            "enterprise_run_attempt": enterprise_run_attempt,
-            "orchestrator_run_url": orchestrator_run_url,
-            "orchestrator_run_id": orchestrator_run_id,
-            "orchestrator_run_attempt": orchestrator_run_attempt,
-            "summary_json": render_json(summary),
-        }
-        print("Repository dispatch callback payload:")
-        print(render_json(callback_payload))
-        dispatch_callback(
-            token=callback_token,
-            repository=enterprise_repository,
-            summary=summary,
-            conclusion=conclusion,
-            orchestrator_run_url=orchestrator_run_url,
-            orchestrator_run_id=orchestrator_run_id,
-            orchestrator_run_attempt=orchestrator_run_attempt,
-            enterprise_sha=enterprise_sha,
-            enterprise_run_id=enterprise_run_id,
-            enterprise_run_attempt=enterprise_run_attempt,
-            api_base_url=api_base_url,
-        )
-        print("Sent Enterprise repository_dispatch callback.")
-    except Exception as exc:
-        errors.append(f"repository_dispatch: {exc}")
+    if enable_repository_dispatch:
+        try:
+            callback_payload = {
+                "status": conclusion,
+                "enterprise_sha": enterprise_sha,
+                "enterprise_run_id": enterprise_run_id,
+                "enterprise_run_attempt": enterprise_run_attempt,
+                "orchestrator_run_url": orchestrator_run_url,
+                "orchestrator_run_id": orchestrator_run_id,
+                "orchestrator_run_attempt": orchestrator_run_attempt,
+                "summary_json": render_json(summary),
+            }
+            print("Repository dispatch callback payload:")
+            print(render_json(callback_payload))
+            dispatch_callback(
+                token=callback_token,
+                repository=enterprise_repository,
+                summary=summary,
+                conclusion=conclusion,
+                orchestrator_run_url=orchestrator_run_url,
+                orchestrator_run_id=orchestrator_run_id,
+                orchestrator_run_attempt=orchestrator_run_attempt,
+                enterprise_sha=enterprise_sha,
+                enterprise_run_id=enterprise_run_id,
+                enterprise_run_attempt=enterprise_run_attempt,
+                api_base_url=api_base_url,
+            )
+            print("Sent Enterprise repository_dispatch callback.")
+        except Exception as exc:
+            errors.append(f"repository_dispatch: {exc}")
+    else:
+        print("Skipping repository_dispatch callback.")
 
     if errors:
         print("One or more callbacks failed:")
         for error in errors:
             print(f"- {error}")
-        if len(errors) == 2:
+        if any(error.startswith("commit status:") for error in errors):
             return 1
 
     return 0

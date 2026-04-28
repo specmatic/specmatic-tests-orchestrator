@@ -15,9 +15,10 @@ It is designed to:
 The workflow expects the following environment/input values:
 
 - `SPECMATIC_JAR_URL`: location of the jar built by `specmatic/enterprise`
+- `ENTERPRISE_VERSION`: Enterprise version under test, for example `1.12.1-SNAPSHOT`
 - `ORCHESTRATOR_TEST_EXECUTOR_PATH`: optional override for the manifest used by tests or manual runs. Relative paths are resolved from the repo root.
-- `SPECMATIC_SUMMARY_JSON`: path to the consolidated JSON summary
-- `SPECMATIC_SUMMARY_HTML`: path to the consolidated HTML summary
+- `SPECMATIC_SUMMARY_JSON`: path to the orchestration JSON summary, usually `outputs/orchestration-summary.json`
+- `SPECMATIC_SUMMARY_HTML`: path to the orchestration HTML dashboard, usually `outputs/index.html`
 - `ENTERPRISE_REPOSITORY`: target repo to update, usually `specmatic/enterprise`
 - `ENTERPRISE_SHA`: commit SHA in Enterprise that should receive the status/check update
 - `ENTERPRISE_RUN_ID`: originating Enterprise workflow run id
@@ -91,6 +92,7 @@ Example:
   env:
     GH_TOKEN: ${{ secrets.ORCHESTRATOR_TRIGGER_TOKEN }}
     JAR_URL: ${{ steps.upload_jar.outputs.jar_url }}
+    ENTERPRISE_VERSION: 1.12.1-SNAPSHOT
   run: |
     gh api repos/specmatic/specmatic-tests-orchestrator/dispatches \
       -X POST \
@@ -99,7 +101,8 @@ Example:
       -f client_payload[enterprise_repository]="specmatic/enterprise" \
       -f client_payload[enterprise_sha]="$GITHUB_SHA" \
       -f client_payload[enterprise_run_id]="$GITHUB_RUN_ID" \
-      -f client_payload[enterprise_run_attempt]="$GITHUB_RUN_ATTEMPT"
+      -f client_payload[enterprise_run_attempt]="$GITHUB_RUN_ATTEMPT" \
+      -f client_payload[enterprise_version]="$ENTERPRISE_VERSION"
 ```
 
 The token stored in `ORCHESTRATOR_TRIGGER_TOKEN` needs permission to create repository dispatch events in `specmatic/specmatic-tests-orchestrator`.

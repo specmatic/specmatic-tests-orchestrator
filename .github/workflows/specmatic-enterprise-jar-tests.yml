@@ -24,6 +24,10 @@ on:
         description: Enterprise workflow run attempt
         required: false
         type: string
+      enterprise_version:
+        description: Enterprise version to test, for example 1.12.1-SNAPSHOT
+        required: true
+        type: string
       test_executor_path:
         description: Optional test executor fixture path for manual runs
         required: false
@@ -81,11 +85,13 @@ jobs:
               "ENTERPRISE_SHA": pick("enterprise_sha"),
               "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),
               "ENTERPRISE_RUN_ATTEMPT": pick("enterprise_run_attempt"),
+              "ENTERPRISE_STATUS_CONTEXT": pick("enterprise_status_context"),
+              "ENTERPRISE_VERSION": pick("enterprise_version"),
               "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
-              "SPECMATIC_SUMMARY_JSON": "consolidated_output/summary.json",
-              "SPECMATIC_SUMMARY_HTML": "consolidated_output/summary.html",
+              "SPECMATIC_SUMMARY_JSON": "outputs/orchestration-summary.json",
+              "SPECMATIC_SUMMARY_HTML": "outputs/index.html",
             }
 
           for key, value in values.items():
@@ -99,6 +105,7 @@ jobs:
           : "${SPECMATIC_JAR_URL:?SPECMATIC_JAR_URL is required}"
           : "${ENTERPRISE_REPOSITORY:?ENTERPRISE_REPOSITORY is required}"
           : "${ENTERPRISE_SHA:?ENTERPRISE_SHA is required}"
+          : "${ENTERPRISE_VERSION:?ENTERPRISE_VERSION is required}"
 
       - name: Download the Enterprise jar
         run: |
@@ -115,25 +122,45 @@ jobs:
             pip install -r requirements.txt
           fi
 
-      - name: Run Python orchestration
+      - name: Run Specmatic tests
+        id: specmatic-tests
+        env:
+          ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
+          ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set +e
+          mkdir -p "$SPEC_OUTPUTS_DIR" "$SPEC_CONSOLIDATED_DIR"
+          export SPECMATIC_JAR_PATH
+          export SPECMATIC_JAR_URL
+          export ENTERPRISE_VERSION
+          export ORCHESTRATOR_TEST_EXECUTOR_PATH
+          export SPEC_OUTPUTS_DIR
+          python3 scripts/run-orchestration-test.py \
+            --config "${ORCHESTRATOR_TEST_EXECUTOR_PATH:-}" \
+            --outputs-dir "$SPEC_OUTPUTS_DIR" \
+            --specmatic-jar-path "$SPECMATIC_JAR_PATH" \
+            --enterprise-version "$ENTERPRISE_VERSION"
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Send callback to Enterprise
+        if: always()
         env:
           ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.SPECMATIC_GITHUB_TOKEN }}
           ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
           ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ENABLE_CHECK_RUNS: "false"
         run: |
           set -euo pipefail
-          mkdir -p "$SPEC_OUTPUTS_DIR" "$SPEC_CONSOLIDATED_DIR"
-          export SPECMATIC_JAR_PATH
-          export SPECMATIC_JAR_URL
-          export ENTERPRISE_REPOSITORY
-          export ENTERPRISE_SHA
-          export ENTERPRISE_RUN_ID
-          export ENTERPRISE_RUN_ATTEMPT
-          export ORCHESTRATOR_TEST_EXECUTOR_PATH
-          export SPEC_OUTPUTS_DIR
-          export SPEC_CONSOLIDATED_DIR
-          python3 scripts/orchestrate.py
+          python3 scripts/bridge_to_enterprise.py
+
+      - name: Fail workflow if tests failed
+        if: always()
+        run: |
+          test "${{ steps.specmatic-tests.outputs.exit_code }}" = "0"
 
       - name: Verify summary files
         if: always()
