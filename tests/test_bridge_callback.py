@@ -205,12 +205,49 @@ class BridgeCallbackTest(unittest.TestCase):
 
                 step_summary = step_summary_path.read_text(encoding="utf-8")
                 self.assertIn("Specmatic Orchestration Result", step_summary)
-                self.assertIn("| Total | 233 |", step_summary)
-                self.assertIn("| Failed | 6 |", step_summary)
+                self.assertIn("| Total workflows | n/a |", step_summary)
+                self.assertIn("| Total tests | 233 |", step_summary)
+                self.assertIn("| Failed tests | 6 |", step_summary)
+                self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | failed | 227 | 5 | 4 |", step_summary)
             finally:
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=2)
+
+    def test_summary_markdown_separates_workflow_counts_from_test_counts(self) -> None:
+        summary = {
+            "conclusion": "failure",
+            "total": 1,
+            "passed_count": 0,
+            "failed_count": 1,
+            "total_tests": 0,
+            "failed_tests": 0,
+            "skipped_tests": 0,
+            "results": [
+                {
+                    "type": "sample-project",
+                    "repository": "contract-tests",
+                    "workflow": ".github/workflows/gradle.yml",
+                    "status": "command_failed",
+                    "total_tests": 0,
+                    "failed_tests": 0,
+                    "skipped_tests": 0,
+                    "details": "3 command(s) failed",
+                }
+            ],
+        }
+
+        markdown = __import__("scripts.bridge_to_enterprise", fromlist=["summary_markdown"]).summary_markdown(
+            summary,
+            "failure",
+            "http://example.local/orchestrator/run/1",
+        )
+
+        self.assertIn("| Total workflows | 1 |", markdown)
+        self.assertIn("| Failed workflows | 1 |", markdown)
+        self.assertIn("| Total tests | 0 |", markdown)
+        self.assertIn("| Failed tests | 0 |", markdown)
+        self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | command_failed | 0 | 0 | 0 | 3 command(s) failed |", markdown)
 
 
 if __name__ == "__main__":

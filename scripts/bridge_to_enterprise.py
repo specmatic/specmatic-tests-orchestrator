@@ -96,18 +96,22 @@ def infer_conclusion(summary: dict[str, Any]) -> str:
 def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
     raw_summary = render_json(summary)
     excerpt = raw_summary if len(raw_summary) <= 3500 else raw_summary[:3450] + "\n... truncated for display ..."
-    total = pick_first(summary, ["total_tests", "total", "total_count", "tests_total", "num_tests"])
-    passed = pick_first(summary, ["passed", "passed_count", "success_count", "successful_count"])
-    failed = pick_first(summary, ["failed_tests", "failed", "failed_count", "failures", "error_count"])
-    skipped = pick_first(summary, ["skipped_tests", "skipped", "skipped_count"])
+    total_workflows = summary.get("total")
+    passed_workflows = summary.get("passed_count")
+    failed_workflows = summary.get("failed_count")
+    total_tests = pick_first(summary, ["total_tests", "total_count", "tests_total", "num_tests"])
+    failed_tests = pick_first(summary, ["failed_tests", "failures", "error_count"])
+    skipped_tests = pick_first(summary, ["skipped_tests", "skipped", "skipped_count"])
     duration = pick_first(summary, ["duration_seconds", "duration", "elapsed", "elapsed_seconds", "runtime_seconds"])
 
     rows = [
         ("Conclusion", conclusion),
-        ("Total", total if total is not None else "n/a"),
-        ("Passed", passed if passed is not None else "n/a"),
-        ("Failed", failed if failed is not None else "n/a"),
-        ("Skipped", skipped if skipped is not None else "n/a"),
+        ("Total workflows", total_workflows if total_workflows is not None else "n/a"),
+        ("Passed workflows", passed_workflows if passed_workflows is not None else "n/a"),
+        ("Failed workflows", failed_workflows if failed_workflows is not None else "n/a"),
+        ("Total tests", total_tests if total_tests is not None else "n/a"),
+        ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
+        ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
         ("Duration", duration if duration is not None else "n/a"),
         ("Orchestrator run", orchestrator_run_url),
     ]
@@ -115,6 +119,41 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
     body = ["| Key | Value |", "| --- | --- |"]
     for key, value in rows:
         body.append(f"| {key} | {value} |")
+
+    results = summary.get("results")
+    if isinstance(results, list) and results:
+        body.extend(
+            [
+                "",
+                "Workflow results:",
+                "",
+                "| Repository | Workflow | Status | Tests | Failed | Skipped | Details |",
+                "| --- | --- | --- | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
+            details = str(result.get("details") or "").replace("|", "\\|")
+            if len(details) > 180:
+                details = details[:177] + "..."
+            body.append(
+                "| "
+                + " | ".join(
+                    [
+                        repository or "n/a",
+                        str(result.get("workflow", "n/a")),
+                        str(result.get("status", "n/a")),
+                        str(result.get("total_tests", "n/a")),
+                        str(result.get("failed_tests", "n/a")),
+                        str(result.get("skipped_tests", "n/a")),
+                        details or "n/a",
+                    ]
+                )
+                + " |"
+            )
+
     body.append("")
     body.append("Summary JSON excerpt:")
     body.append("```json")
