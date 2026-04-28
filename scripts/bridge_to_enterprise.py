@@ -148,7 +148,11 @@ def create_check_run(
     orchestrator_run_url: str,
     summary: dict[str, Any],
     api_base_url: str,
+    enterprise_run_id: str | None,
+    enterprise_run_attempt: str | None,
 ) -> None:
+    run_id = enterprise_run_id or "unknown"
+    attempt = enterprise_run_attempt or "unknown"
     payload = {
         "name": "Specmatic orchestrator",
         "head_sha": head_sha,
@@ -156,7 +160,7 @@ def create_check_run(
         "conclusion": conclusion,
         "details_url": orchestrator_run_url,
         "output": {
-            "title": "Specmatic orchestrator summary",
+            "title": f"Specmatic orchestrator for run {run_id} attempt {attempt}",
             "summary": summary_markdown(summary, conclusion, orchestrator_run_url),
         },
     }
@@ -235,6 +239,8 @@ def main() -> int:
                 orchestrator_run_url=orchestrator_run_url,
                 summary=summary,
                 api_base_url=api_base_url,
+                enterprise_run_id=enterprise_run_id,
+                enterprise_run_attempt=enterprise_run_attempt,
             )
             print("Created Enterprise check run.")
         except Exception as exc:
