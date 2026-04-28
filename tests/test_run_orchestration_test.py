@@ -6,6 +6,7 @@ import shutil
 import sys
 import unittest
 import uuid
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -60,6 +61,74 @@ class RunOrchestrationTest(unittest.TestCase):
             finally:
                 run_orchestration_test.os.environ.clear()
                 run_orchestration_test.os.environ.update(original_env)
+
+    def test_clean_temp_dir_removes_stale_contents_and_recreates_directory(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            temp_root = temp_dir / "orchestration-temp"
+            stale_file = temp_root / "sample-project" / "repo" / "stale.txt"
+            stale_file.parent.mkdir(parents=True)
+            stale_file.write_text("old checkout", encoding="utf-8")
+
+            run_orchestration_test.clean_temp_dir(temp_root)
+
+            self.assertTrue(temp_root.is_dir())
+            self.assertFalse(stale_file.exists())
+
+    def test_clean_temp_dir_refuses_current_working_directory(self) -> None:
+        with self.assertRaises(ValueError):
+            run_orchestration_test.clean_temp_dir(Path.cwd())
+
+    def test_clean_outputs_dir_removes_stale_reports_and_recreates_directory(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            outputs_root = temp_dir / "outputs"
+            stale_report = outputs_root / "sample-project" / "repo" / "gradle" / "index.html"
+            stale_report.parent.mkdir(parents=True)
+            stale_report.write_text("old report", encoding="utf-8")
+
+            run_orchestration_test.clean_outputs_dir(outputs_root)
+
+            self.assertTrue(outputs_root.is_dir())
+            self.assertFalse(stale_report.exists())
+
+    def test_clean_outputs_dir_refuses_current_working_directory(self) -> None:
+        with self.assertRaises(ValueError):
+            run_orchestration_test.clean_outputs_dir(Path.cwd())
+
+    def test_validate_required_enterprise_version_reports_missing_value(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ.pop("ENTERPRISE_VERSION", None)
+            error = run_orchestration_test.validate_required_enterprise_version(
+                mock.Mock(enterprise_version="")
+            )
+            self.assertIn("ENTERPRISE_VERSION is required", error)
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+    def test_validate_required_enterprise_version_accepts_env_value(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ["ENTERPRISE_VERSION"] = "1.2.3"
+            error = run_orchestration_test.validate_required_enterprise_version(
+                mock.Mock(enterprise_version="")
+            )
+            self.assertEqual(error, "")
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+    def test_validate_required_enterprise_version_accepts_cli_value(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ.pop("ENTERPRISE_VERSION", None)
+            error = run_orchestration_test.validate_required_enterprise_version(
+                mock.Mock(enterprise_version="1.2.3")
+            )
+            self.assertEqual(error, "")
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
 
     def test_extracts_test_commands_from_workflow(self) -> None:
         with workspace_temp_dir() as temp_dir:
@@ -293,6 +362,17 @@ jobs:
         self.assertIn("-PspecmaticVersion=2.0.0-SNAPSHOT", overridden)
         self.assertIn("-PspecmaticEnterpriseVersion=3.0.0-SNAPSHOT", overridden)
         self.assertIn("-PenterpriseVersion=3.0.0-SNAPSHOT", overridden)
+
+    def test_apply_gradle_version_overrides_adds_snapshot_repo_url(self) -> None:
+        command = ["./gradlew", "test"]
+        overridden = run_orchestration_test.apply_gradle_version_overrides(
+            command,
+            specmatic_version="",
+            enterprise_version="3.0.0-SNAPSHOT",
+            snapshot_repo_url="file:///tmp/specmatic-maven",
+        )
+
+        self.assertIn("-PsnapshotRepoUrl=file:///tmp/specmatic-maven", overridden)
 
     def test_apply_gradle_version_overrides_skips_non_gradle_commands(self) -> None:
         command = ["npx", "playwright", "test", "specs/openapi"]
@@ -735,7 +815,8 @@ jobs:
     def test_prepare_cli_dependency_copies_jar_from_path(self) -> None:
         with workspace_temp_dir() as temp_dir:
             source_jar = temp_dir / "specmatic-enterprise.jar"
-            source_jar.write_text("jar", encoding="utf-8")
+            with zipfile.ZipFile(source_jar, "w") as jar:
+                jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
             log_file = temp_dir / "run.log"
             target_jar = temp_dir / ".specmatic" / "specmatic-enterprise.jar"
 
@@ -756,6 +837,49 @@ jobs:
                 self.assertTrue(target_jar.exists())
             finally:
                 run_orchestration_test.cli_jar_path = original_cli_jar_path
+
+    def test_prepare_cli_dependency_accepts_existing_target_jar_path(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            target_jar = temp_dir / ".specmatic" / "specmatic-enterprise.jar"
+            target_jar.parent.mkdir(parents=True)
+            with zipfile.ZipFile(target_jar, "w") as jar:
+                jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+            log_file = temp_dir / "run.log"
+
+            original_cli_jar_path = run_orchestration_test.cli_jar_path
+            try:
+                run_orchestration_test.cli_jar_path = lambda: target_jar
+                ok, details = run_orchestration_test.prepare_cli_dependency(
+                    run_orchestration_test.CliSetupConfig(
+                        jar_url="",
+                        jar_path=str(target_jar),
+                        allow_installer=False,
+                    ),
+                    log_file=log_file,
+                    dry_run=False,
+                )
+                self.assertTrue(ok)
+                self.assertIn("already present", details)
+            finally:
+                run_orchestration_test.cli_jar_path = original_cli_jar_path
+
+    def test_write_enterprise_maven_repo_creates_executable_artifact(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            source_jar = temp_dir / "specmatic-enterprise.jar"
+            with zipfile.ZipFile(source_jar, "w") as jar:
+                jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+            repo_dir = temp_dir / "maven"
+
+            repo_url = run_orchestration_test.write_enterprise_maven_repo(
+                repo_dir,
+                source_jar,
+                "1.12.1-SNAPSHOT",
+            )
+
+            artifact_dir = repo_dir / "io" / "specmatic" / "enterprise" / "executable" / "1.12.1-SNAPSHOT"
+            self.assertEqual(repo_url, repo_dir.resolve().as_uri())
+            self.assertTrue((artifact_dir / "executable-1.12.1-SNAPSHOT.jar").exists())
+            self.assertTrue((artifact_dir / "executable-1.12.1-SNAPSHOT.pom").exists())
 
     def test_cli_setup_failure_reports_failing_command_details(self) -> None:
         with workspace_temp_dir() as temp_dir:

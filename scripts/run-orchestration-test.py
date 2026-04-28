@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -142,6 +143,7 @@ class CliSetupConfig:
     jar_url: str
     jar_path: str
     allow_installer: bool
+    snapshot_repo_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -204,8 +206,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--specmatic-version", default=os.environ.get("SPECMATIC_VERSION", ""))
     parser.add_argument("--enterprise-version", default=os.environ.get("ENTERPRISE_VERSION", ""))
     parser.add_argument("--enterprise-docker-image", default=os.environ.get("ENTERPRISE_DOCKER_IMAGE", ""))
+    parser.add_argument("--snapshot-repo-url", default=os.environ.get("SNAPSHOT_REPO_URL", ""))
     parser.add_argument("--allow-cli-installer", action="store_true", help="Allow curl/bash installer fallback for CLI matrix rows.")
     return parser.parse_args()
+
+
+def validate_required_enterprise_version(args: argparse.Namespace) -> str:
+    if args.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "").strip():
+        return ""
+    return (
+        "ENTERPRISE_VERSION is required but was not set. "
+        "Set ENTERPRISE_VERSION in the environment or pass --enterprise-version."
+    )
 
 
 def utc_now() -> str:
@@ -332,6 +344,24 @@ def remove_tree(path: Path) -> None:
     if not path.exists():
         return
     shutil.rmtree(path, onerror=handle_remove_readonly)
+
+
+def clean_run_directory(path: Path, label: str) -> None:
+    resolved = path.resolve()
+    unsafe_paths = {Path.cwd().resolve(), Path.home().resolve(), Path("/").resolve(), Path("/tmp").resolve()}
+    if resolved in unsafe_paths:
+        raise ValueError(f"refusing to clean unsafe {label} directory: {path}")
+    log_progress(f"Cleaning {label} directory {path}")
+    remove_tree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def clean_temp_dir(temp_dir: Path) -> None:
+    clean_run_directory(temp_dir, "temp")
+
+
+def clean_outputs_dir(outputs_dir: Path) -> None:
+    clean_run_directory(outputs_dir, "outputs")
 
 
 def run_command(command: list[str], cwd: Path | None, env: dict[str, str] | None, log_file: Path) -> int:
@@ -992,6 +1022,7 @@ def apply_gradle_version_overrides(
     command: list[str],
     specmatic_version: str,
     enterprise_version: str,
+    snapshot_repo_url: str = "",
 ) -> list[str]:
     if not is_gradle_invocation(command):
         return command
@@ -1004,6 +1035,8 @@ def apply_gradle_version_overrides(
             overridden.append(f"-PspecmaticEnterpriseVersion={enterprise_version}")
         if not any(arg.startswith("-PenterpriseVersion=") for arg in overridden):
             overridden.append(f"-PenterpriseVersion={enterprise_version}")
+    if snapshot_repo_url and not any(arg.startswith("-PsnapshotRepoUrl=") for arg in overridden):
+        overridden.append(f"-PsnapshotRepoUrl={snapshot_repo_url}")
     return overridden
 
 
@@ -1049,37 +1082,88 @@ def cli_jar_path() -> Path:
     return Path.home() / ".specmatic" / "specmatic-enterprise.jar"
 
 
-def prepare_cli_dependency(config: CliSetupConfig, log_file: Path, dry_run: bool) -> tuple[bool, str]:
+def resolve_enterprise_jar_source(config: CliSetupConfig) -> Path | None:
+    if config.jar_path:
+        return Path(config.jar_path).expanduser().resolve()
+    if config.jar_url:
+        return None
+    target_jar = cli_jar_path()
+    if target_jar.exists():
+        return target_jar
+    return None
+
+
+def ensure_enterprise_jar_available(config: CliSetupConfig, log_file: Path, dry_run: bool) -> tuple[bool, str, Path | None]:
     target_jar = cli_jar_path()
     target_jar.parent.mkdir(parents=True, exist_ok=True)
 
     if dry_run:
         with log_file.open("a", encoding="utf-8") as log:
-            log.write(f"\n[cli-setup] dry-run for {target_jar}\n")
-        return True, f"dry-run: cli setup skipped for {target_jar}"
+            log.write(f"\n[enterprise-jar] dry-run for {target_jar}\n")
+        return True, f"dry-run: Enterprise jar setup skipped for {target_jar}", target_jar
 
-    if config.jar_path:
-        source = Path(config.jar_path).expanduser().resolve()
+    source = resolve_enterprise_jar_source(config)
+    if source:
         if not source.exists():
-            return False, f"specmatic jar path does not exist: {source}"
-        shutil.copy2(source, target_jar)
-        return True, f"copied Specmatic jar to {target_jar}"
+            return False, f"specmatic jar path does not exist: {source}", None
+        if not zipfile.is_zipfile(source):
+            return False, f"specmatic jar path is not a valid jar: {source}", None
+        if source != target_jar.resolve():
+            shutil.copy2(source, target_jar)
+            return True, f"copied Specmatic jar to {target_jar}", target_jar
+        return True, f"Specmatic jar already present at {target_jar}", target_jar
 
     if config.jar_url:
         try:
             urllib.request.urlretrieve(config.jar_url, target_jar)
         except (urllib.error.URLError, OSError) as exc:
-            return False, f"failed to download Specmatic jar from URL: {exc}"
-        return True, f"downloaded Specmatic jar to {target_jar}"
+            return False, f"failed to download Specmatic jar from URL: {exc}", None
+        if not zipfile.is_zipfile(target_jar):
+            return False, f"downloaded Specmatic jar is not a valid jar: {target_jar}", None
+        return True, f"downloaded Specmatic jar to {target_jar}", target_jar
+
+    return False, "Specmatic Enterprise jar not found. Provide --specmatic-jar-path, --specmatic-jar-url, or install ~/.specmatic/specmatic-enterprise.jar.", None
+
+
+def prepare_cli_dependency(config: CliSetupConfig, log_file: Path, dry_run: bool) -> tuple[bool, str]:
+    ok, details, _ = ensure_enterprise_jar_available(config, log_file=log_file, dry_run=dry_run)
+    if ok:
+        return True, details
 
     if config.allow_installer and os.name != "nt":
         command = ["bash", "-lc", "curl https://docs.specmatic.io/install-specmatic-enterprise.sh | bash"]
         exit_code = run_command(command, cwd=None, env=os.environ.copy(), log_file=log_file)
+        target_jar = cli_jar_path()
         if exit_code == 0 and target_jar.exists():
             return True, f"installed Specmatic jar to {target_jar}"
         return False, "CLI installer ran but Specmatic jar was not found"
 
-    return False, "CLI test requires Specmatic jar. Provide --specmatic-jar-path or --specmatic-jar-url."
+    return False, details
+
+
+def write_enterprise_maven_repo(repo_dir: Path, jar_path: Path, enterprise_version: str) -> str:
+    artifact_dir = repo_dir / "io" / "specmatic" / "enterprise" / "executable" / enterprise_version
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_base = f"executable-{enterprise_version}"
+    shutil.copy2(jar_path, artifact_dir / f"{artifact_base}.jar")
+    (artifact_dir / f"{artifact_base}.pom").write_text(
+        "\n".join(
+            [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<project xmlns="http://maven.apache.org/POM/4.0.0"',
+                '         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+                '         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">',
+                "  <modelVersion>4.0.0</modelVersion>",
+                "  <groupId>io.specmatic.enterprise</groupId>",
+                "  <artifactId>executable</artifactId>",
+                f"  <version>{enterprise_version}</version>",
+                "</project>",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return repo_dir.resolve().as_uri()
 
 
 def copy_result_paths(repo_dir: Path, output_dir: Path, patterns: list[str]) -> list[str]:
@@ -1250,6 +1334,31 @@ def execute_workflow_commands(
     cli_ready = False
     failure_details: list[str] = []
     final_exit_code = 0
+    snapshot_repo_url = cli_setup_config.snapshot_repo_url
+
+    has_gradle_command = False
+    for workflow_command in commands:
+        try:
+            has_gradle_command = has_gradle_command or is_gradle_invocation(tokenize_command(workflow_command.command))
+        except ValueError:
+            continue
+
+    if (
+        enterprise_version.endswith("-SNAPSHOT")
+        and has_gradle_command
+        and not snapshot_repo_url
+        and not dry_run
+    ):
+        ok, setup_details, jar_path = ensure_enterprise_jar_available(cli_setup_config, log_file=log_file, dry_run=dry_run)
+        if not ok or jar_path is None:
+            details = (
+                f"could not prepare local Maven repository for "
+                f"io.specmatic.enterprise:executable:{enterprise_version} ({setup_details})"
+            )
+            return STATUS_SETUP_FAILED, details, 1, executed
+        snapshot_repo_url = write_enterprise_maven_repo(output_dir / "enterprise-maven-repo", jar_path, enterprise_version)
+        with log_file.open("a", encoding="utf-8") as log:
+            log.write(f"\n[enterprise-maven] using {snapshot_repo_url} for io.specmatic.enterprise:executable:{enterprise_version}\n")
 
     for index, workflow_command in enumerate(commands, start=1):
         working_dir = (repo_dir / workflow_command.working_directory).resolve()
@@ -1306,6 +1415,7 @@ def execute_workflow_commands(
                     normalized,
                     specmatic_version=effective_specmatic_version,
                     enterprise_version=enterprise_version,
+                    snapshot_repo_url=snapshot_repo_url,
                 )
                 exit_code = run_command(normalized, cwd=working_dir, env=env, log_file=log_file)
             except ValueError as exc:
@@ -1819,6 +1929,11 @@ def render_html_reports(outputs_dir: Path, summary: dict[str, Any], results: lis
 
 def main() -> int:
     args = parse_args()
+    enterprise_version_error = validate_required_enterprise_version(args)
+    if enterprise_version_error:
+        print(enterprise_version_error, file=sys.stderr)
+        return 1
+
     config_path = resolve_config_path(args.config)
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
@@ -1831,11 +1946,17 @@ def main() -> int:
 
     temp_dir = Path(args.temp_dir)
     outputs_dir = Path(args.outputs_dir)
-    outputs_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        clean_temp_dir(temp_dir)
+        clean_outputs_dir(outputs_dir)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     cli_setup_config = CliSetupConfig(
         jar_url=args.specmatic_jar_url,
         jar_path=args.specmatic_jar_path,
         allow_installer=args.allow_cli_installer,
+        snapshot_repo_url=args.snapshot_repo_url,
     )
 
     all_results: list[WorkflowResult] = []
