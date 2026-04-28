@@ -579,13 +579,26 @@ jobs: {}
         with workspace_temp_dir() as temp_dir:
             gradlew_bat = temp_dir / "gradlew.bat"
             gradlew_bat.write_text("@echo off\n", encoding="utf-8")
+            gradlew = temp_dir / "gradlew"
+            gradlew.write_text("#!/bin/sh\n", encoding="utf-8")
 
             command = run_orchestration_test.normalize_command_for_os(["./gradlew", "test"], temp_dir)
 
             if os.name == "nt":
                 self.assertEqual(command[0], str(gradlew_bat.resolve()))
             else:
-                self.assertEqual(command[0], str((temp_dir / "gradlew").resolve()) if (temp_dir / "gradlew").exists() else "./gradlew")
+                self.assertEqual(command[0], str(gradlew.resolve()))
+
+    def test_normalizes_gradle_wrapper_to_absolute_posix_path_from_relative_repo(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            gradlew = temp_dir / "gradlew"
+            gradlew.write_text("#!/bin/sh\n", encoding="utf-8")
+            repo_dir = Path(os.path.relpath(temp_dir, Path.cwd()))
+
+            with mock.patch.object(run_orchestration_test.os, "name", "posix"):
+                command = run_orchestration_test.normalize_command_for_os(["./gradlew", "test"], repo_dir)
+
+            self.assertEqual(command[0], str(gradlew.resolve()))
 
     def test_strips_outer_quotes_from_tests_filter_argument(self) -> None:
         with workspace_temp_dir() as temp_dir:

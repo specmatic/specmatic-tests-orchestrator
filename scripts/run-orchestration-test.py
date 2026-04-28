@@ -974,7 +974,7 @@ def normalize_command_for_os(command: list[str], repo_dir: Path) -> list[str]:
         gradlew = repo_dir / "gradlew"
         if gradlew.exists():
             gradlew.chmod(0o755)
-            return [str(gradlew), *command[1:]]
+            return [str(gradlew.resolve()), *command[1:]]
 
     return [normalized, *command[1:]]
 
