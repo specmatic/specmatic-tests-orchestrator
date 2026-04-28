@@ -316,7 +316,7 @@ def main() -> int:
                         "\n".join(
                             [
                                 "",
-                                "## Final Callback",
+                                f"## Final Callback for enterprise run {enterprise_run_id or 'unknown'} (completed)",
                                 "",
                                 f"- Result: {'✅' if summary['conclusion'] == 'success' else '❌'} {summary['conclusion']}",
                                 f"- Check: [Orchestrator Gate]({check_url})",
