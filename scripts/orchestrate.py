@@ -45,40 +45,29 @@ def pick(payload: dict[str, Any], *names: str, default: str = "") -> str:
     return default
 
 
-def check_run_url(repository: str, check_run_id: str) -> str:
-    if not repository or not check_run_id:
-        return ""
-    return f"https://github.com/{repository}/checks/{check_run_id}"
+def status_context(run_id: str | None, run_attempt: str | None) -> str:
+    return f"Orchestrator Gate for run {run_id or 'unknown'} attempt {run_attempt or 'unknown'}"
 
 
-def update_check_run(
+def update_commit_status(
     token: str,
     repository: str,
-    check_run_id: str,
-    conclusion: str,
+    sha: str,
+    state: str,
     orchestrator_run_url: str,
-    summary: dict[str, Any],
+    description: str,
     api_base_url: str,
-    enterprise_run_id: str | None,
-    enterprise_run_attempt: str | None,
+    context: str,
 ) -> dict[str, Any]:
-    run_id = enterprise_run_id or "unknown"
-    run_attempt = enterprise_run_attempt or "unknown"
     return github_request(
-        "PATCH",
-        f"{api_base_url}/repos/{repository}/check-runs/{check_run_id}",
+        "POST",
+        f"{api_base_url}/repos/{repository}/statuses/{sha}",
         token,
         {
-            "status": "completed",
-            "conclusion": conclusion,
-            "details_url": orchestrator_run_url,
-            "output": {
-                "title": f"Orchestrator Gate for run {run_id} attempt {run_attempt}",
-                "summary": render_markdown_summary(
-                    summary,
-                    title=f"Specmatic Orchestrator Summary for run {run_id} attempt {run_attempt}",
-                ),
-            },
+            "state": state,
+            "target_url": orchestrator_run_url,
+            "description": description[:140],
+            "context": context,
         },
     )
 
@@ -239,8 +228,8 @@ def main() -> int:
     enterprise_sha = os.environ.get("ENTERPRISE_SHA") or pick(payload, "enterprise_sha")
     enterprise_run_id = os.environ.get("ENTERPRISE_RUN_ID") or pick(payload, "enterprise_run_id")
     enterprise_run_attempt = os.environ.get("ENTERPRISE_RUN_ATTEMPT") or pick(payload, "enterprise_run_attempt")
-    enterprise_check_run_id = os.environ.get("ENTERPRISE_CHECK_RUN_ID") or pick(payload, "enterprise_check_run_id")
-    callback_token = os.environ.get("ENTERPRISE_CALLBACK_TOKEN", "")
+    enterprise_status_context = os.environ.get("ENTERPRISE_STATUS_CONTEXT") or pick(payload, "enterprise_status_context")
+    status_token = os.environ.get("ENTERPRISE_CALLBACK_TOKEN", "")
     api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     test_executor_path = os.environ.get("ORCHESTRATOR_TEST_EXECUTOR_PATH") or pick(payload, "test_executor_path")
 
@@ -284,21 +273,26 @@ def main() -> int:
             )
         finally:
             assert summary is not None
-            if callback_token:
+            if status_token:
                 try:
-                    check_run_response = update_check_run(
-                        token=callback_token,
+                    state = "success" if summary["conclusion"] in {"success", "neutral"} else "failure"
+                    context = enterprise_status_context or status_context(enterprise_run_id, enterprise_run_attempt)
+                    status_response = update_commit_status(
+                        token=status_token,
                         repository=enterprise_repository,
-                        check_run_id=enterprise_check_run_id,
-                        conclusion=summary["conclusion"],
+                        sha=enterprise_sha,
+                        state=state,
                         orchestrator_run_url=os.environ.get("ORCHESTRATOR_RUN_URL", ""),
-                        summary=summary,
+                        description=(
+                            "Specmatic orchestrator completed successfully"
+                            if state == "success"
+                            else "Specmatic orchestrator completed with failures"
+                        ),
                         api_base_url=api_base_url,
-                        enterprise_run_id=enterprise_run_id,
-                        enterprise_run_attempt=enterprise_run_attempt,
+                        context=context,
                     )
-                    print("Updated pending check run.")
-                    print(json.dumps(check_run_response, indent=2, sort_keys=True))
+                    print("Updated commit status.")
+                    print(json.dumps(status_response, indent=2, sort_keys=True))
                 except Exception as exc:
                     execution_error = execution_error or str(exc)
     if execution_error:
@@ -308,23 +302,20 @@ def main() -> int:
     if step_summary_path and summary is not None:
         with Path(step_summary_path).open("a", encoding="utf-8") as handle:
             handle.write(render_markdown_summary(summary, title="Specmatic Orchestrator Summary"))
-            if enterprise_check_run_id:
-                check_url = check_run_url(enterprise_repository, enterprise_check_run_id)
-                if check_url:
-                    handle.write(
-                        "\n".join(
-                            [
-                                "",
-                                f"## Final Callback for enterprise run {enterprise_run_id or 'unknown'} attempt {enterprise_run_attempt or 'unknown'} (completed)",
-                                "",
-                                f"- Result: {'✅' if summary['conclusion'] == 'success' else '❌'} {summary['conclusion']}",
-                                f"- Check: [Orchestrator Gate]({check_url})",
-                                f"- Enterprise repo: `{enterprise_repository}`",
-                                f"- Enterprise check run id: `{enterprise_check_run_id}`",
-                            ]
-                        )
-                        + "\n"
-                    )
+            handle.write(
+                "\n".join(
+                    [
+                        "",
+                        f"## Final Status for enterprise run {enterprise_run_id or 'unknown'} attempt {enterprise_run_attempt or 'unknown'} (completed)",
+                        "",
+                        f"- Result: {'✅' if summary['conclusion'] == 'success' else '❌'} {summary['conclusion']}",
+                        f"- Status context: `{enterprise_status_context or status_context(enterprise_run_id, enterprise_run_attempt)}`",
+                        f"- Enterprise repo: `{enterprise_repository}`",
+                        f"- Enterprise SHA: `{enterprise_sha}`",
+                    ]
+                )
+                + "\n"
+            )
 
     print(f"Downloaded jar from: {jar_url}")
     print(f"Used manifest: {sample_config}")

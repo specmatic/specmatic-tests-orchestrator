@@ -8,7 +8,7 @@ It is designed to:
 2. Download that jar into the workflow runner.
 3. Run the Python orchestration script that produces per-source outputs.
 4. Collect `summary.json` and `summary.html`.
-5. Send a final callback with the pass/fail result and summary JSON when tests finish.
+5. Update the commit status with the pass/fail result when tests finish.
 
 ## Workflow contract
 
@@ -42,13 +42,13 @@ flowchart LR
   A -->|repository_dispatch<br/>payload: jar_url, enterprise_sha,<br/>run metadata| C["specmatic/specmatic-tests-orchestrator<br/>GitHub Actions"]
   B -->|download jar| C
   C -->|run sample or real test logic| D["scripts/orchestrate.py"]
+  A -->|create pending commit status| H["specmatic/orchestrator-tester<br/>Orchestrator Gate"]
   D -->|write per-source results| E["outputs/<source>/result.json"]
   D -->|merge results| F["consolidated_output/summary.json"]
   D -->|render HTML summary| G["consolidated_output/summary.html"]
-  D -->|final callback + summary JSON| I["repository_dispatch: specmatic-orchestrator-finished"]
   G -->|uploaded artifact| K["GitHub Actions artifact"]
   E -->|uploaded artifact| K
-  I -->|status=success/failure + summary| J["specmatic/orchestrator-tester"]
+  D -->|update final commit status| H
 ```
 
 ### Dry-Run Flow
@@ -64,17 +64,17 @@ flowchart LR
   D -->|downloads jar| J["Temporary enterprise.jar"]
   D -->|generates sample source outputs| O["outputs/<source>/result.json"]
   D -->|builds consolidated output| C["consolidated_output/summary.json<br/>consolidated_output/summary.html"]
-  D -->|callback POSTs| S
-  S -->|captures requests| R["Printed callback payloads"]
+  D -->|commit status POST| S
+  S -->|captures requests| R["Printed status payloads"]
 ```
 
 ### Key Pieces
 
 - `specmatic/enterprise` is the upstream build producer.
-- `specmatic/specmatic-tests-orchestrator` is the test runner and callback relay.
+- `specmatic/specmatic-tests-orchestrator` is the test runner and status updater.
 - [`scripts/orchestrate.py`](./scripts/orchestrate.py) owns the end-to-end execution path.
 - [`scripts/consolidate_outputs.py`](./scripts/consolidate_outputs.py) turns source-level results into a single summary.
-- [`scripts/bridge_to_enterprise.py`](./scripts/bridge_to_enterprise.py) sends the final callback to Enterprise.
+- [`scripts/bridge_to_enterprise.py`](./scripts/bridge_to_enterprise.py) is a legacy helper kept for reference only.
 - [`scripts/local_demo.py`](./scripts/local_demo.py) simulates the full system locally without GitHub.
 - [`tests/test_orchestrate_end_to_end.py`](./tests/test_orchestrate_end_to_end.py) verifies the same end-to-end flow as an automated test.
 - [`tests/test_orchestrate_invalid_jar_end_to_end.py`](./tests/test_orchestrate_invalid_jar_end_to_end.py) verifies invalid jar handling before tests start.
@@ -108,36 +108,36 @@ If you want to manually test a different orchestrator scenario from this workflo
 
 If the jar is private or temporary, `SPECMATIC_JAR_URL` must be a URL that the orchestrator runner can actually download.
 
-The callback step uses `ENTERPRISE_CALLBACK_TOKEN`, which should be a GitHub token that can:
+The status update step uses `ENTERPRISE_CALLBACK_TOKEN`, which should be a GitHub token that can:
 
-- send `repository_dispatch` events back to the target repo
-- optionally create check runs if `ENABLE_CHECK_RUNS=true` is set and the token supports GitHub App check runs
+- update commit statuses on the target repo commit
+- read the target repo metadata needed for the status update
 
-For local integration tests, the bridge also honors `GITHUB_API_BASE_URL`, which lets the callback target a temporary localhost server instead of `https://api.github.com`.
+For local integration tests, the orchestrator also honors `GITHUB_API_BASE_URL`, which lets the status update target a temporary localhost server instead of `https://api.github.com`.
 
-## How the callback works
+## How the status update works
 
-After the Python run finishes, `scripts/bridge_to_enterprise.py`:
+After the Python run finishes, `scripts/orchestrate.py`:
 
 - reads `summary.json`
 - infers success or failure from the summary payload
-- sends a `repository_dispatch` event back to the target repo with a compact summary payload
-- optionally creates a GitHub check run if enabled
+- writes a commit status update back to the target repo commit
+- includes the summary payload in the workflow logs and summaries
 
-If the raw JSON is small enough, the callback includes the full `summary.json` body.
-If it is too large for GitHub's dispatch payload limits, the callback includes a truncated excerpt and a `summary_json_truncated` flag instead.
+If the raw JSON is small enough, the summary markdown includes the full `summary.json` body.
+If it is too large, the summary includes a truncated excerpt so the workflow page stays readable.
 
 ## Local end-to-end test
 
 [`tests/test_orchestrate_end_to_end.py`](./tests/test_orchestrate_end_to_end.py) simulates the full flow:
 
 1. Receives a fake `repository_dispatch` trigger.
-2. Spins up a local HTTP server to serve the jar and accept callback POSTs.
+2. Spins up a local HTTP server to serve the jar and accept status POSTs.
 3. Runs [`scripts/orchestrate.py`](./scripts/orchestrate.py).
 4. Verifies `outputs/` and `consolidated_output/` were created.
-5. Verifies the start and finish callback payloads were sent.
+5. Verifies the final status update payload was sent.
 
-[`tests/test_orchestrate_failure_end_to_end.py`](./tests/test_orchestrate_failure_end_to_end.py) uses the failure fixture to prove the final callback reports `failure`.
+[`tests/test_orchestrate_failure_end_to_end.py`](./tests/test_orchestrate_failure_end_to_end.py) uses the failure fixture to prove the final status reports `failure`.
 
 ## Local smoke run
 
@@ -149,10 +149,10 @@ python3 scripts/local_demo.py
 
 That will:
 
-1. Spin up a local server that serves a fake jar and accepts callbacks.
+1. Spin up a local server that serves a fake jar and accepts status updates.
 2. Feed a fake `repository_dispatch` trigger into [`scripts/orchestrate.py`](./scripts/orchestrate.py).
 3. Generate sample `outputs/` and `consolidated_output/` directories.
-4. Print the captured callback payloads.
+4. Print the captured status update payload.
 
 ## What Enterprise needs
 
@@ -161,16 +161,12 @@ In `specmatic/enterprise`, you will need to:
 1. Add a build step that uploads the jar somewhere reachable by the orchestrator.
 2. Trigger this repository with `repository_dispatch` or `workflow_dispatch`.
 3. Pass `SPECMATIC_JAR_URL`, the Enterprise commit SHA, and the Enterprise run metadata.
-4. Store a token secret that can call back into Enterprise from this public repo.
-5. If you want the original Enterprise Actions run page to show the summary text, add a follow-up workflow in Enterprise that listens for the callback dispatch and writes the returned summary into `GITHUB_STEP_SUMMARY` or creates a check run.
+4. Store a token secret that can update commit statuses on the Enterprise commit from this public repo.
+5. If you want the original Enterprise Actions run page to show the summary text, add a follow-up workflow in Enterprise that reads the same status context and writes the returned summary into `GITHUB_STEP_SUMMARY`.
 
 ### Important limitation
 
-GitHub Actions cannot retroactively edit the finished job summary of a different repository's workflow run. The usual patterns are:
-
-- create a check run on the Enterprise commit
-- trigger a follow-up Enterprise workflow that renders the summary
-- or have the Enterprise workflow wait synchronously for the orchestrator result and write the summary itself
+GitHub Actions cannot retroactively edit the finished job summary of a different repository's workflow run. The usual pattern is to update the commit status on the Enterprise commit and, if desired, have a follow-up workflow render the same summary in the target repo.
 
 ## Default file paths
 

@@ -35,7 +35,7 @@ class _InvalidManifestHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
-    def do_PATCH(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8")
         try:
@@ -45,7 +45,7 @@ class _InvalidManifestHandler(BaseHTTPRequestHandler):
 
         self.server.requests.append(  # type: ignore[attr-defined]
             {
-                "method": "PATCH",
+                "method": "POST",
                 "path": self.path,
                 "payload": payload,
             }
@@ -56,10 +56,6 @@ class _InvalidManifestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"{}")
         self.server.event.set()  # type: ignore[attr-defined]
-
-    def do_POST(self) -> None:  # noqa: N802
-        self.send_response(405)
-        self.end_headers()
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
         return
@@ -91,7 +87,6 @@ class OrchestrateInvalidManifestEndToEndTest(unittest.TestCase):
                             "enterprise_sha": "abc123def456",
                             "enterprise_run_id": "101",
                             "enterprise_run_attempt": "1",
-                            "enterprise_check_run_id": "999",
                         },
                     }
                 ),
@@ -124,15 +119,15 @@ class OrchestrateInvalidManifestEndToEndTest(unittest.TestCase):
                 )
 
                 self.assertNotEqual(result.returncode, 0, result.stdout + "\n" + result.stderr)
-                self.assertTrue(server.event.wait(5), "timed out waiting for check-run PATCH")
+                self.assertTrue(server.event.wait(5), "timed out waiting for status POST")
                 self.assertEqual(len(server.requests), 1)
 
                 finished = server.requests[0]
-                self.assertEqual(finished["method"], "PATCH")
-                self.assertTrue(finished["path"].endswith("/check-runs/999"))
-                self.assertEqual(finished["payload"]["status"], "completed")
-                self.assertEqual(finished["payload"]["conclusion"], "failure")
-                self.assertIn("Orchestrator Gate for run 101 attempt 1", finished["payload"]["output"]["title"])
+                self.assertEqual(finished["method"], "POST")
+                self.assertTrue(finished["path"].endswith("/statuses/abc123def456"))
+                self.assertEqual(finished["payload"]["state"], "failure")
+                self.assertEqual(finished["payload"]["context"], "Orchestrator Gate for run 101 attempt 1")
+                self.assertIn("Specmatic orchestrator completed with failures", finished["payload"]["description"])
                 self.assertFalse((outputs_dir / "sample-project-contract-tests" / "result.json").exists())
                 self.assertTrue((consolidated_dir / "summary.json").exists())
                 self.assertTrue((consolidated_dir / "summary.html").exists())
