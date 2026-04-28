@@ -22,7 +22,7 @@
       "total": 8,
       "passed_count": 6,
       "failed_count": 2,
-      "delay_sec": 15
+      "delay_sec": 75
     }
   },
   {
@@ -35,7 +35,7 @@
       "total": 5,
       "passed_count": 5,
       "failed_count": 0,
-      "delay_sec": 20
+      "delay_sec": 60
     }
   }
 ]
