@@ -1384,19 +1384,10 @@ def build_command_env(
         env["ENTERPRISE_DOCKER_IMAGE"] = enterprise_docker_image
         env["SPECMATIC_STUDIO_DOCKER_IMAGE"] = enterprise_docker_image
     if is_playwright_executor(executor):
-        env.setdefault("ENV_NAME", "local")
-        env.setdefault("APPLITOOLS_API_KEY", "")
-        # playwright.config.ts uses !!process.env.CI; the string "false" is truthy.
-        # Keep CI empty so reuseExistingServer works when orchestrator already booted Studio.
-        env["CI"] = ""
-        # Orchestrator manages Studio lifecycle; prevent playwright.config webServer auto-start.
-        env["USE_DOCKER"] = "false"
-        # CI runners typically have no display server.
-        env["HEADLESS"] = "true"
-        env["PLAYWRIGHT_HTML_OPEN"] = "never"
-        if not env.get("APPLITOOLS_API_KEY"):
-            env["ENABLE_VISUAL"] = "false"
-        # Force Docker mode inside playwright.config.ts even if .env files contain jar values.
+        env["SPECMATIC_TEST_ORCHESTRATOR"] = "true"
+        disable_visual = os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true").strip().lower()
+        env["ORCHESTRATOR_DISABLE_VISUAL"] = "true" if disable_visual in {"1", "true", "yes", "on"} else "false"
+        # Keep jar vars empty so orchestrator-managed runtime is always used.
         env["SPECMATIC_STUDIO_JAR_URL"] = ""
         env["SPECMATIC_JAR_URL"] = ""
         env["SPECMATIC_JAR_PATH"] = ""
