@@ -1,0 +1,41 @@
+[
+  {
+    "type": "sample-project",
+    "name": "contract-tests",
+    "description": "Synthetic contract checks for the orchestrator-tester flow",
+    "result": {
+      "kind": "happy-path",
+      "passed": true,
+      "total": 12,
+      "passed_count": 12,
+      "failed_count": 0,
+      "delay_sec": 5
+    }
+  },
+  {
+    "type": "sample-project",
+    "name": "asyncapi-tests",
+    "description": "Synthetic AsyncAPI checks for the orchestrator-tester flow",
+    "result": {
+      "kind": "mixed",
+      "passed": true,
+      "total": 8,
+      "passed_count": 8,
+      "failed_count": 0,
+      "delay_sec": 15
+    }
+  },
+  {
+    "type": "playwright",
+    "name": "ui-tests",
+    "description": "Synthetic UI smoke checks for the orchestrator-tester flow",
+    "result": {
+      "kind": "smoke",
+      "passed": true,
+      "total": 5,
+      "passed_count": 5,
+      "failed_count": 0,
+      "delay_sec": 25
+    }
+  }
+]

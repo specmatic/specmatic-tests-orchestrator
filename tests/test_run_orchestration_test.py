@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import shutil
 import sys
 import unittest
 import uuid
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -129,6 +130,218 @@ class RunOrchestrationTest(unittest.TestCase):
         finally:
             run_orchestration_test.os.environ.clear()
             run_orchestration_test.os.environ.update(original_env)
+
+    def test_validate_required_enterprise_version_accepts_repository_url(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ.pop("ENTERPRISE_VERSION", None)
+            error = run_orchestration_test.validate_required_enterprise_version(
+                mock.Mock(
+                    enterprise_version=(
+                        "https://repo.specmatic.io/#/snapshots/io/specmatic/"
+                        "enterprise/executable-all/1.12.1-SNAPSHOT"
+                    )
+                )
+            )
+            self.assertEqual(error, "")
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+    def test_resolve_enterprise_version_snapshot_downloads_latest_timestamped_jar(self) -> None:
+        metadata_by_url = {
+            (
+                "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/"
+                "executable-all/1.12.1-SNAPSHOT/maven-metadata.xml"
+            ): """
+<metadata>
+  <versioning>
+    <snapshotVersions>
+      <snapshotVersion>
+        <extension>jar</extension>
+        <value>1.12.1-20260427.120947-1</value>
+      </snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+</metadata>
+""",
+        }
+        original_read_remote_text = run_orchestration_test.read_remote_text
+        try:
+            run_orchestration_test.read_remote_text = lambda url: metadata_by_url[url]
+
+            artifact = run_orchestration_test.resolve_enterprise_artifact_selector("1.12.1-SNAPSHOT")
+
+            self.assertEqual(artifact.version, "1.12.1-SNAPSHOT")
+            self.assertEqual(
+                artifact.jar_url,
+                (
+                    "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all/"
+                    "1.12.1-SNAPSHOT/executable-all-1.12.1-20260427.120947-1.jar"
+                ),
+            )
+        finally:
+            run_orchestration_test.read_remote_text = original_read_remote_text
+
+    def test_resolve_enterprise_snapshot_repo_url_downloads_latest_version_jar(self) -> None:
+        base_url = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
+        metadata_by_url = {
+            f"{base_url}/maven-metadata.xml": """
+<metadata>
+  <versioning>
+    <latest>1.12.1-SNAPSHOT</latest>
+  </versioning>
+</metadata>
+""",
+            f"{base_url}/1.12.1-SNAPSHOT/maven-metadata.xml": """
+<metadata>
+  <versioning>
+    <snapshotVersions>
+      <snapshotVersion>
+        <extension>jar</extension>
+        <value>1.12.1-20260427.120947-1</value>
+      </snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+</metadata>
+""",
+        }
+        original_read_remote_text = run_orchestration_test.read_remote_text
+        try:
+            run_orchestration_test.read_remote_text = lambda url: metadata_by_url[url]
+
+            artifact = run_orchestration_test.resolve_enterprise_artifact_selector(base_url)
+
+            self.assertEqual(artifact.version, "1.12.1-SNAPSHOT")
+            self.assertTrue(artifact.jar_url.endswith("/executable-all-1.12.1-20260427.120947-1.jar"))
+        finally:
+            run_orchestration_test.read_remote_text = original_read_remote_text
+
+    def test_resolve_enterprise_direct_jar_url_uses_it_directly(self) -> None:
+        jar_url = (
+            "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all/"
+            "1.12.1-SNAPSHOT/executable-all-1.12.1-20260427.120947-1.jar"
+        )
+
+        artifact = run_orchestration_test.resolve_enterprise_artifact_selector(jar_url)
+
+        self.assertEqual(artifact.version, "1.12.1-SNAPSHOT")
+        self.assertEqual(artifact.jar_url, jar_url)
+
+    def test_resolve_enterprise_artifact_inputs_preserves_explicit_dummy_jar_url(self) -> None:
+        artifact = run_orchestration_test.resolve_enterprise_artifact_inputs(
+            "0.0.0-DUMMY",
+            "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
+            "",
+        )
+
+        self.assertEqual(artifact.version, "0.0.0-DUMMY")
+        self.assertEqual(
+            artifact.jar_url,
+            "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
+        )
+
+    def test_resolve_enterprise_release_selector_downloads_latest_release_jar(self) -> None:
+        base_url = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
+        metadata_by_url = {
+            f"{base_url}/maven-metadata.xml": """
+<metadata>
+  <versioning>
+    <release>1.12.0</release>
+  </versioning>
+</metadata>
+""",
+        }
+        original_read_remote_text = run_orchestration_test.read_remote_text
+        try:
+            run_orchestration_test.read_remote_text = lambda url: metadata_by_url[url]
+
+            artifact = run_orchestration_test.resolve_enterprise_artifact_selector("RELEASE")
+
+            self.assertEqual(artifact.version, "1.12.0")
+            self.assertEqual(
+                artifact.jar_url,
+                "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all/1.12.0/executable-all-1.12.0.jar",
+            )
+        finally:
+            run_orchestration_test.read_remote_text = original_read_remote_text
+
+    def test_main_logs_enterprise_artifact_resolution(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            config = temp_dir / "test-executor.json"
+            config.write_text("[]", encoding="utf-8")
+            original_argv = sys.argv[:]
+            original_resolve = run_orchestration_test.resolve_enterprise_artifact_inputs
+            try:
+                sys.argv = [
+                    "run-orchestration-test.py",
+                    "--config",
+                    str(config),
+                    "--enterprise-version",
+                    "SNAPSHOT",
+                ]
+                run_orchestration_test.resolve_enterprise_artifact_inputs = lambda enterprise_version, jar_url, jar_path: run_orchestration_test.EnterpriseArtifact(
+                    version="1.12.1-SNAPSHOT",
+                    jar_url=(
+                        "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all/"
+                        "1.12.1-SNAPSHOT/executable-all-1.12.1-20260429.014552-3.jar"
+                    ),
+                )
+
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = run_orchestration_test.main()
+
+                self.assertEqual(exit_code, 1)
+                output = stdout.getvalue()
+                self.assertIn("Enterprise artifact resolution:", output)
+                self.assertIn("requested ENTERPRISE_VERSION='SNAPSHOT'", output)
+                self.assertIn("resolved enterprise_version='1.12.1-SNAPSHOT'", output)
+                self.assertIn("resolved jar_url=https://repo.specmatic.io/", output)
+            finally:
+                sys.argv = original_argv
+                run_orchestration_test.resolve_enterprise_artifact_inputs = original_resolve
+
+    def test_run_executor_uses_synthetic_result_profile_without_repository(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            executor = run_orchestration_test.TestExecutor(
+                type="sample-project",
+                github_url="",
+                name="contract-tests",
+                branch="",
+                description="",
+                workflow_globs=[],
+                workflow_files=[],
+                command=[],
+                result_paths=[],
+                result_profile={
+                    "kind": "happy-path",
+                    "passed": True,
+                    "total": 12,
+                    "failed_count": 0,
+                    "skipped_count": 1,
+                },
+            )
+
+            results = run_orchestration_test.run_executor(
+                executor=executor,
+                temp_dir=temp_dir / "temp",
+                outputs_dir=temp_dir / "outputs",
+                clean=True,
+                cli_setup_config=run_orchestration_test.CliSetupConfig(
+                    jar_url="https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
+                    jar_path="",
+                    allow_installer=False,
+                ),
+                dry_run=False,
+                enterprise_version="0.0.0-DUMMY",
+            )
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0].status, run_orchestration_test.STATUS_PASSED)
+            self.assertEqual(results[0].total_tests, 12)
+            self.assertEqual(results[0].skipped_tests, 1)
+            self.assertEqual(results[0].workflow, "_profile")
 
     def test_extracts_test_commands_from_workflow(self) -> None:
         with workspace_temp_dir() as temp_dir:

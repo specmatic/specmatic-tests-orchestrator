@@ -12,6 +12,7 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 import zipfile
@@ -47,6 +48,9 @@ STATUS_NO_COMMANDS = "no_test_commands"
 STATUS_SETUP_FAILED = "setup_failed"
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
 SKIPPED_WORKFLOW_FILE_NAMES = {"playwright-enterprise-release-gate.yml"}
+ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+ENTERPRISE_SNAPSHOT_REPO_URL = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
+ENTERPRISE_RELEASE_REPO_URL = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
 PLAYWRIGHT_SERVICE_HEALTH_URLS = {
     "inventory-api": "http://127.0.0.1:8095/health",
     "order-api": "http://127.0.0.1:8090/products",
@@ -99,6 +103,7 @@ class TestExecutor:
     specmatic_version: str = ""
     enterprise_version: str = ""
     enterprise_docker_image: str = ""
+    result_profile: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +154,12 @@ class CliSetupConfig:
     jar_path: str
     allow_installer: bool
     snapshot_repo_url: str = ""
+
+
+@dataclass(frozen=True)
+class EnterpriseArtifact:
+    version: str
+    jar_url: str
 
 
 @dataclass(frozen=True)
@@ -217,12 +228,163 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_required_enterprise_version(args: argparse.Namespace) -> str:
-    if args.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "").strip():
+    enterprise_version = (args.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")).strip()
+    if not enterprise_version:
+        return (
+            "ENTERPRISE_VERSION is required but was not set. "
+            "Set ENTERPRISE_VERSION in the environment or pass --enterprise-version."
+        )
+    if is_enterprise_repository_selector(enterprise_version):
         return ""
     return (
-        "ENTERPRISE_VERSION is required but was not set. "
-        "Set ENTERPRISE_VERSION in the environment or pass --enterprise-version."
+        "ENTERPRISE_VERSION must be one of: a Maven artifact version such as 1.12.1-SNAPSHOT, "
+        "SNAPSHOT, RELEASE, a Specmatic Enterprise repository URL, or a direct Enterprise jar URL. "
+        f"Got {enterprise_version!r}."
     )
+
+
+def is_http_url(value: str) -> bool:
+    parsed = urllib.parse.urlsplit(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def is_enterprise_repository_selector(value: str) -> bool:
+    normalized = value.strip()
+    if normalized.upper() in {"SNAPSHOT", "RELEASE"}:
+        return True
+    if ENTERPRISE_VERSION_RE.match(normalized):
+        return True
+    if not is_http_url(normalized):
+        return False
+    parsed = urllib.parse.urlsplit(normalized)
+    path = parsed.path
+    fragment = parsed.fragment
+    return (
+        parsed.netloc == "repo.specmatic.io"
+        and (
+            "/io/specmatic/enterprise/executable-all" in path
+            or "/io/specmatic/enterprise/executable-all" in fragment
+        )
+    )
+
+
+def normalize_repo_browser_url(raw_url: str) -> str:
+    parsed = urllib.parse.urlsplit(raw_url)
+    if parsed.fragment.startswith("/"):
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.fragment, "", ""))
+    return raw_url
+
+
+def trim_url_slash(url: str) -> str:
+    return url.rstrip("/")
+
+
+def read_remote_text(url: str) -> str:
+    with urllib.request.urlopen(url, timeout=60) as response:
+        return response.read().decode("utf-8")
+
+
+def parse_xml_text(text: str, source_url: str) -> ET.Element:
+    try:
+        return ET.fromstring(text)
+    except ET.ParseError as exc:
+        raise ValueError(f"could not parse Maven metadata from {source_url}: {exc}") from exc
+
+
+def child_text(parent: ET.Element, path: str) -> str:
+    element = parent.find(path)
+    return (element.text or "").strip() if element is not None else ""
+
+
+def latest_version_from_metadata(base_url: str) -> str:
+    metadata_url = f"{trim_url_slash(base_url)}/maven-metadata.xml"
+    root = parse_xml_text(read_remote_text(metadata_url), metadata_url)
+    latest = child_text(root, "./versioning/latest") or child_text(root, "./versioning/release")
+    if latest:
+        return latest
+    versions = [
+        (version.text or "").strip()
+        for version in root.findall("./versioning/versions/version")
+        if (version.text or "").strip()
+    ]
+    if versions:
+        return versions[-1]
+    raise ValueError(f"could not find latest Enterprise version in {metadata_url}")
+
+
+def latest_snapshot_jar_url(base_url: str, version: str) -> str:
+    version_url = f"{trim_url_slash(base_url)}/{version}"
+    metadata_url = f"{version_url}/maven-metadata.xml"
+    root = parse_xml_text(read_remote_text(metadata_url), metadata_url)
+
+    for snapshot_version in root.findall("./versioning/snapshotVersions/snapshotVersion"):
+        extension = child_text(snapshot_version, "extension")
+        classifier = child_text(snapshot_version, "classifier")
+        value = child_text(snapshot_version, "value")
+        if extension == "jar" and not classifier and value:
+            return f"{version_url}/executable-all-{value}.jar"
+
+    timestamp = child_text(root, "./versioning/snapshot/timestamp")
+    build_number = child_text(root, "./versioning/snapshot/buildNumber")
+    if timestamp and build_number and version.endswith("-SNAPSHOT"):
+        base_version = version[: -len("-SNAPSHOT")]
+        return f"{version_url}/executable-all-{base_version}-{timestamp}-{build_number}.jar"
+
+    raise ValueError(f"could not find latest Enterprise snapshot jar in {metadata_url}")
+
+
+def latest_release_jar_url(base_url: str, version: str) -> str:
+    return f"{trim_url_slash(base_url)}/{version}/executable-all-{version}.jar"
+
+
+def enterprise_version_from_jar_url(jar_url: str) -> str:
+    parsed = urllib.parse.urlsplit(normalize_repo_browser_url(jar_url))
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) >= 2 and parts[-1].endswith(".jar"):
+        return parts[-2]
+    raise ValueError(f"could not infer Enterprise version from jar URL: {jar_url}")
+
+
+def resolve_enterprise_artifact_selector(selector: str) -> EnterpriseArtifact:
+    raw = selector.strip()
+    upper = raw.upper()
+    if upper == "SNAPSHOT":
+        version = latest_version_from_metadata(ENTERPRISE_SNAPSHOT_REPO_URL)
+        return EnterpriseArtifact(version=version, jar_url=latest_snapshot_jar_url(ENTERPRISE_SNAPSHOT_REPO_URL, version))
+    if upper == "RELEASE":
+        version = latest_version_from_metadata(ENTERPRISE_RELEASE_REPO_URL)
+        return EnterpriseArtifact(version=version, jar_url=latest_release_jar_url(ENTERPRISE_RELEASE_REPO_URL, version))
+    if not is_http_url(raw):
+        base_url = ENTERPRISE_SNAPSHOT_REPO_URL if raw.endswith("-SNAPSHOT") else ENTERPRISE_RELEASE_REPO_URL
+        jar_url = latest_snapshot_jar_url(base_url, raw) if raw.endswith("-SNAPSHOT") else latest_release_jar_url(base_url, raw)
+        return EnterpriseArtifact(version=raw, jar_url=jar_url)
+
+    normalized_url = trim_url_slash(normalize_repo_browser_url(raw))
+    if normalized_url.endswith(".jar"):
+        return EnterpriseArtifact(version=enterprise_version_from_jar_url(normalized_url), jar_url=normalized_url)
+
+    parts = [part for part in urllib.parse.urlsplit(normalized_url).path.split("/") if part]
+    if parts and parts[-1] != "executable-all":
+        version = parts[-1]
+        base_url = normalized_url[: -len(version)].rstrip("/")
+        jar_url = latest_snapshot_jar_url(base_url, version) if version.endswith("-SNAPSHOT") else latest_release_jar_url(base_url, version)
+        return EnterpriseArtifact(version=version, jar_url=jar_url)
+
+    is_release_repo = "/releases/" in urllib.parse.urlsplit(normalized_url).path
+    version = latest_version_from_metadata(normalized_url)
+    jar_url = latest_release_jar_url(normalized_url, version) if is_release_repo else latest_snapshot_jar_url(normalized_url, version)
+    return EnterpriseArtifact(version=version, jar_url=jar_url)
+
+
+def resolve_enterprise_artifact_inputs(enterprise_version: str, jar_url: str, jar_path: str) -> EnterpriseArtifact:
+    if jar_url or jar_path:
+        if not ENTERPRISE_VERSION_RE.match(enterprise_version):
+            raise ValueError(
+                "when --specmatic-jar-url or --specmatic-jar-path is provided, "
+                "ENTERPRISE_VERSION must be a Maven artifact version such as 1.12.1-SNAPSHOT"
+            )
+        return EnterpriseArtifact(version=enterprise_version, jar_url=jar_url)
+    return resolve_enterprise_artifact_selector(enterprise_version)
 
 
 def utc_now() -> str:
@@ -311,6 +473,7 @@ def normalize_executor(raw: dict[str, Any], index: int) -> TestExecutor:
         specmatic_version=specmatic_version,
         enterprise_version=enterprise_version,
         enterprise_docker_image=enterprise_docker_image,
+        result_profile=raw.get("result") if isinstance(raw.get("result"), dict) else None,
     )
 
 
@@ -1519,8 +1682,7 @@ def execute_workflow_commands(
             continue
 
     if (
-        enterprise_version.endswith("-SNAPSHOT")
-        and has_gradle_command
+        has_gradle_command
         and not snapshot_repo_url
         and can_prepare_enterprise_maven_repo(cli_setup_config)
         and not dry_run
@@ -1769,6 +1931,59 @@ def synthetic_result(
     return result
 
 
+def profiled_result(executor: TestExecutor, outputs_dir: Path) -> WorkflowResult:
+    profile = executor.result_profile or {}
+    output_dir = outputs_dir / executor.type / executor.name / "_profile"
+    log_file = output_dir / "run.log"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    passed = bool(profile.get("passed", True))
+    total = int(profile.get("total", profile.get("passed_count", 0) + profile.get("failed_count", 0)))
+    failed = int(profile.get("failed_count", 0))
+    skipped = int(profile.get("skipped_count", profile.get("skipped", 0)))
+    delay = float(profile.get("delay_sec", 0) or 0)
+    if delay > 0:
+        time.sleep(delay)
+    status = STATUS_PASSED if passed and failed == 0 else STATUS_FAILED
+    details = f"orchestrator-tester synthetic profile: {profile.get('kind', 'default')}"
+    log_file.write_text(
+        "\n".join(
+            [
+                "Synthetic orchestrator-tester result profile",
+                f"kind={profile.get('kind', 'default')}",
+                f"passed={passed}",
+                f"total={total}",
+                f"failed={failed}",
+                f"skipped={skipped}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = WorkflowResult(
+        type=executor.type,
+        repository=executor.name,
+        repo_url=executor.github_url,
+        branch=executor.branch,
+        workflow="_profile",
+        status=status,
+        exit_code=0 if status == STATUS_PASSED else 1,
+        duration_seconds=int(delay),
+        commands=[],
+        executed_commands=[],
+        output_dir=str(output_dir),
+        log_file=str(log_file),
+        copied_result_paths=[],
+        total_tests=total,
+        failed_tests=failed,
+        skipped_tests=skipped,
+        started_at=utc_now(),
+        finished_at=utc_now(),
+        details=details,
+    )
+    write_json(output_dir / "result.json", asdict(result))
+    return result
+
+
 def run_executor(
     executor: TestExecutor,
     temp_dir: Path,
@@ -1780,6 +1995,10 @@ def run_executor(
     enterprise_version: str = "",
     enterprise_docker_image: str = "",
 ) -> list[WorkflowResult]:
+    if executor.result_profile is not None:
+        log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
+        return [profiled_result(executor, outputs_dir)]
+
     repo_dir = temp_dir / executor.type / executor.name
     setup_dir = outputs_dir / executor.type / executor.name / "_setup"
     setup_log = setup_dir / "run.log"
@@ -2154,6 +2373,32 @@ def main() -> int:
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
+
+    requested_enterprise_version = args.enterprise_version
+    try:
+        enterprise_artifact = resolve_enterprise_artifact_inputs(
+            args.enterprise_version,
+            args.specmatic_jar_url,
+            args.specmatic_jar_path,
+        )
+    except (OSError, urllib.error.URLError, ValueError) as exc:
+        print(f"Could not resolve ENTERPRISE_VERSION {args.enterprise_version!r}: {exc}", file=sys.stderr)
+        return 1
+    args.enterprise_version = enterprise_artifact.version
+    if enterprise_artifact.jar_url:
+        args.specmatic_jar_url = enterprise_artifact.jar_url
+    os.environ["ENTERPRISE_VERSION"] = enterprise_artifact.version
+    if args.specmatic_jar_url:
+        os.environ["SPECMATIC_JAR_URL"] = args.specmatic_jar_url
+    if args.specmatic_jar_path:
+        os.environ["SPECMATIC_JAR_PATH"] = args.specmatic_jar_path
+    log_progress(
+        "Enterprise artifact resolution: "
+        f"requested ENTERPRISE_VERSION={requested_enterprise_version!r}, "
+        f"resolved enterprise_version={enterprise_artifact.version!r}, "
+        f"resolved jar_url={args.specmatic_jar_url or 'n/a'}, "
+        f"resolved jar_path={args.specmatic_jar_path or 'n/a'}"
+    )
 
     executors = load_executors(config_path)
     if not executors:

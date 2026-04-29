@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       jar_url:
-        description: URL of the jar produced by specmatic/enterprise
-        required: true
+        description: Optional URL of the jar produced by specmatic/enterprise. If omitted, enterprise_version resolves the jar.
+        required: false
         type: string
       enterprise_repository:
         description: Enterprise repository to update
@@ -102,12 +102,12 @@ jobs:
       - name: Validate required inputs
         run: |
           set -euo pipefail
-          : "${SPECMATIC_JAR_URL:?SPECMATIC_JAR_URL is required}"
           : "${ENTERPRISE_REPOSITORY:?ENTERPRISE_REPOSITORY is required}"
           : "${ENTERPRISE_SHA:?ENTERPRISE_SHA is required}"
           : "${ENTERPRISE_VERSION:?ENTERPRISE_VERSION is required}"
 
       - name: Download the Enterprise jar
+        if: env.SPECMATIC_JAR_URL != ''
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/specmatic"
