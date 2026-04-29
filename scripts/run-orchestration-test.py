@@ -12,8 +12,8 @@ import stat
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
+import urllib.error
 import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
@@ -47,6 +47,11 @@ STATUS_NO_COMMANDS = "no_test_commands"
 STATUS_SETUP_FAILED = "setup_failed"
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
 SKIPPED_WORKFLOW_FILE_NAMES = {"playwright-enterprise-release-gate.yml"}
+PLAYWRIGHT_SERVICE_HEALTH_URLS = {
+    "inventory-api": "http://127.0.0.1:8095/health",
+    "order-api": "http://127.0.0.1:8090/products",
+    "order-bff": "http://127.0.0.1:8080/health",
+}
 
 TEST_KEYWORDS = (
     " test",
@@ -925,7 +930,152 @@ def cleanup_playwright_containers(log_file: Path, phase: str) -> None:
 
 
 def should_cleanup_shared_containers(executor: TestExecutor) -> bool:
-    return is_playwright_executor(executor) or is_sample_project_executor(executor)
+    return is_sample_project_executor(executor)
+
+
+def is_playwright_jar_mode(cli_setup_config: CliSetupConfig) -> bool:
+    return bool((cli_setup_config.jar_url or "").strip() or (cli_setup_config.jar_path or "").strip())
+
+
+def resolve_playwright_compose_file(repo_dir: Path, jar_mode: bool) -> Path | None:
+    preferred_names: list[str] = []
+    if jar_mode:
+        preferred_names.extend(["docker-compose-jar.yaml", "docker-compose-jar.yml"])
+    preferred_names.extend(["docker-compose.yaml", "docker-compose.yml"])
+
+    search_roots = [repo_dir]
+    nested_demo = repo_dir / "specmatic-studio-demo"
+    if nested_demo.exists():
+        search_roots.insert(0, nested_demo)
+
+    for root in search_roots:
+        for file_name in preferred_names:
+            candidate = root / file_name
+            if candidate.exists():
+                return candidate
+
+    # Fallback: recursive search by preferred names anywhere in repo.
+    for file_name in preferred_names:
+        matches = sorted(path for path in repo_dir.rglob(file_name) if path.is_file())
+        if matches:
+            return matches[0]
+
+    return None
+
+
+def is_http_ready(url: str, timeout_seconds: float = 2.0) -> bool:
+    try:
+        request = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return 200 <= int(getattr(response, "status", 0)) < 500
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def wait_for_playwright_support_services(timeout_seconds: int = 120) -> tuple[bool, str]:
+    deadline = time.time() + timeout_seconds
+    pending = set(PLAYWRIGHT_SERVICE_HEALTH_URLS.keys())
+    while time.time() < deadline:
+        for service in list(pending):
+            if is_http_ready(PLAYWRIGHT_SERVICE_HEALTH_URLS[service]):
+                pending.remove(service)
+        if not pending:
+            return True, "support services are healthy"
+        time.sleep(2)
+    return False, f"support services did not become healthy: {', '.join(sorted(pending))}"
+
+
+def start_playwright_support_runtime(
+    executor: TestExecutor,
+    repo_dir: Path,
+    outputs_dir: Path,
+    jar_mode: bool,
+    cli_setup_config: CliSetupConfig,
+    dry_run: bool,
+) -> tuple[bool, str]:
+    runtime_dir = outputs_dir / executor.type / executor.name / "_runtime"
+    runtime_log = runtime_dir / "run.log"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_log.write_text("", encoding="utf-8")
+
+    compose_file = resolve_playwright_compose_file(repo_dir, jar_mode=jar_mode)
+    if compose_file is None:
+        return False, "no docker-compose file found for Playwright runtime"
+
+    services = PLAYWRIGHT_CONTAINER_NAMES
+    compose_file = compose_file.resolve()
+    compose_cwd = compose_file.parent
+    compose_files = [str(compose_file)]
+    if jar_mode:
+        ok, setup_details, jar_path = ensure_enterprise_jar_available(
+            cli_setup_config,
+            log_file=runtime_log,
+            dry_run=dry_run,
+        )
+        if not ok or jar_path is None:
+            return False, f"failed to prepare studio jar for compose runtime ({setup_details})"
+
+        override_file = runtime_dir / "docker-compose.jar-override.yml"
+        specs_dir = (compose_cwd / "specs").resolve()
+        override_file.write_text(
+            "\n".join(
+                [
+                    "services:",
+                    "  studio:",
+                    "    image: eclipse-temurin:17-jdk",
+                    "    working_dir: /usr/src/app",
+                    "    command: [\"java\", \"-jar\", \"/app/specmatic.jar\", \"studio\"]",
+                    "    volumes:",
+                    f"      - {specs_dir.as_posix()}:/usr/src/app",
+                    f"      - {jar_path.resolve().as_posix()}:/app/specmatic.jar:ro",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        compose_files.append(str(override_file.resolve()))
+
+    command = ["docker", "compose"]
+    for compose_path in compose_files:
+        command.extend(["-f", compose_path])
+    command.extend(["up", "-d", *services])
+    exit_code = run_command(command, cwd=compose_cwd, env=os.environ.copy(), log_file=runtime_log)
+    if exit_code != 0:
+        return False, f"docker compose up failed using {compose_file.name}"
+
+    ok, details = wait_for_playwright_support_services()
+    if not ok:
+        return False, details
+    return True, f"started playwright support runtime using {compose_file.name}"
+
+
+def stop_playwright_support_runtime(executor: TestExecutor, repo_dir: Path, outputs_dir: Path, jar_mode: bool) -> None:
+    runtime_dir = outputs_dir / executor.type / executor.name / "_runtime"
+    runtime_log = runtime_dir / "run.log"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    if not runtime_log.exists():
+        runtime_log.write_text("", encoding="utf-8")
+    compose_file = resolve_playwright_compose_file(repo_dir, jar_mode=jar_mode)
+    if compose_file is None:
+        return
+    compose_file = compose_file.resolve()
+    compose_cwd = compose_file.parent
+    compose_files = [str(compose_file)]
+    if jar_mode:
+        override_file = runtime_dir / "docker-compose.jar-override.yml"
+        if override_file.exists():
+            compose_files.append(str(override_file.resolve()))
+
+    command = ["docker", "compose"]
+    for compose_path in compose_files:
+        command.extend(["-f", compose_path])
+    command.extend(["down", "--remove-orphans"])
+    run_command(
+        command,
+        cwd=compose_cwd,
+        env=os.environ.copy(),
+        log_file=runtime_log,
+    )
 
 
 def read_log_tail(log_file: Path, max_bytes: int = 200_000) -> str:
@@ -1062,10 +1212,10 @@ def build_command_env(
     if enterprise_version:
         env["ORG_GRADLE_PROJECT_specmaticEnterpriseVersion"] = enterprise_version
         env["ORG_GRADLE_PROJECT_enterpriseVersion"] = enterprise_version
-    if specmatic_jar_url:
+    if specmatic_jar_url and not is_playwright_executor(executor):
         env["SPECMATIC_JAR_URL"] = specmatic_jar_url
         env["SPECMATIC_STUDIO_JAR_URL"] = specmatic_jar_url
-    if specmatic_jar_path:
+    if specmatic_jar_path and not is_playwright_executor(executor):
         env["SPECMATIC_JAR_PATH"] = specmatic_jar_path
     if enterprise_docker_image:
         env["ENTERPRISE_DOCKER_IMAGE"] = enterprise_docker_image
@@ -1073,8 +1223,16 @@ def build_command_env(
     if is_playwright_executor(executor):
         env.setdefault("ENV_NAME", "local")
         env.setdefault("APPLITOOLS_API_KEY", "")
+        # playwright.config.ts uses !!process.env.CI; the string "false" is truthy.
+        # Keep CI empty so reuseExistingServer works when orchestrator already booted Studio.
+        env["CI"] = ""
+        env["PLAYWRIGHT_HTML_OPEN"] = "never"
         if not env.get("APPLITOOLS_API_KEY"):
             env["ENABLE_VISUAL"] = "false"
+        # Force Docker mode inside playwright.config.ts even if .env files contain jar values.
+        env["SPECMATIC_STUDIO_JAR_URL"] = ""
+        env["SPECMATIC_JAR_URL"] = ""
+        env["SPECMATIC_JAR_PATH"] = ""
     return env
 
 
@@ -1600,50 +1758,77 @@ def run_executor(
     if setup_status != STATUS_PASSED:
         return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
 
-    if executor.command:
-        return [
-            run_workflow_command_set(
-                executor=executor,
-                repo_dir=repo_dir,
-                outputs_dir=outputs_dir,
-                workflow_label="_configured",
-                commands=configured_workflow_commands(executor),
-                cli_setup_config=cli_setup_config,
-                dry_run=dry_run,
-                specmatic_version=specmatic_version,
-                enterprise_version=enterprise_version,
-                enterprise_docker_image=enterprise_docker_image,
-            )
-        ]
-
-    workflow_files = discover_workflow_files(repo_dir, executor)
-    log_progress(f"    discovered {len(workflow_files)} workflow file{'s' if len(workflow_files) != 1 else ''}")
-    if not workflow_files:
-        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
-
-    results: list[WorkflowResult] = []
-    for workflow_file in workflow_files:
-        if workflow_file.name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
-            continue
-        if is_reusable_only_workflow(workflow_file):
-            continue
-        commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
-        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
-        results.append(
-            run_workflow_command_set(
-                executor=executor,
-                repo_dir=repo_dir,
-                outputs_dir=outputs_dir,
-                workflow_label=workflow_label,
-                commands=commands,
-                cli_setup_config=cli_setup_config,
-                dry_run=dry_run,
-                specmatic_version=specmatic_version,
-                enterprise_version=enterprise_version,
-                enterprise_docker_image=enterprise_docker_image,
-            )
+    runtime_started = False
+    playwright_jar_mode = is_playwright_jar_mode(cli_setup_config)
+    if is_playwright_executor(executor):
+        log_progress("    starting playwright support services")
+        runtime_ok, runtime_details = start_playwright_support_runtime(
+            executor=executor,
+            repo_dir=repo_dir,
+            outputs_dir=outputs_dir,
+            jar_mode=playwright_jar_mode,
+            cli_setup_config=cli_setup_config,
+            dry_run=dry_run,
         )
-    return results
+        if not runtime_ok:
+            return [synthetic_result(executor, outputs_dir, "_runtime", STATUS_SETUP_FAILED, runtime_details, 1)]
+        runtime_started = True
+        log_progress(f"    {runtime_details}")
+
+    try:
+        if executor.command:
+            return [
+                run_workflow_command_set(
+                    executor=executor,
+                    repo_dir=repo_dir,
+                    outputs_dir=outputs_dir,
+                    workflow_label="_configured",
+                    commands=configured_workflow_commands(executor),
+                    cli_setup_config=cli_setup_config,
+                    dry_run=dry_run,
+                    specmatic_version=specmatic_version,
+                    enterprise_version=enterprise_version,
+                    enterprise_docker_image=enterprise_docker_image,
+                )
+            ]
+
+        workflow_files = discover_workflow_files(repo_dir, executor)
+        log_progress(f"    discovered {len(workflow_files)} workflow file{'s' if len(workflow_files) != 1 else ''}")
+        if not workflow_files:
+            return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
+
+        results: list[WorkflowResult] = []
+        for workflow_file in workflow_files:
+            if workflow_file.name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
+                continue
+            if is_reusable_only_workflow(workflow_file):
+                continue
+            commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
+            workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+            results.append(
+                run_workflow_command_set(
+                    executor=executor,
+                    repo_dir=repo_dir,
+                    outputs_dir=outputs_dir,
+                    workflow_label=workflow_label,
+                    commands=commands,
+                    cli_setup_config=cli_setup_config,
+                    dry_run=dry_run,
+                    specmatic_version=specmatic_version,
+                    enterprise_version=enterprise_version,
+                    enterprise_docker_image=enterprise_docker_image,
+                )
+            )
+        return results
+    finally:
+        if runtime_started:
+            log_progress("    stopping playwright support services")
+            stop_playwright_support_runtime(
+                executor=executor,
+                repo_dir=repo_dir,
+                outputs_dir=outputs_dir,
+                jar_mode=playwright_jar_mode,
+            )
 
 
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:

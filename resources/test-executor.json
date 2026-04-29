@@ -1,5 +1,11 @@
 [
   {
+    "type": "playwright",
+    "description": "UI smoke checks for the jar",
+    "github-url": "https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
+    "branch": "main"
+  },
+  {
     "type": "sample-project",
     "name": "contract-tests",
     "description": "Contract-style checks for the jar",
