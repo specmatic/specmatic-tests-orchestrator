@@ -1,4 +1,5 @@
 name: Specmatic Enterprise Jar Tests
+run-name: Specmatic Enterprise Jar Tests (${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
 
 on:
   workflow_dispatch:
@@ -32,6 +33,14 @@ on:
         description: Optional test executor fixture path for manual runs
         required: false
         type: string
+      enterprise_configuration:
+        description: Runner OS/configuration to use for the orchestrated tests
+        required: false
+        default: ubuntu-latest
+        type: choice
+        options:
+          - ubuntu-latest
+          - windows-latest
   repository_dispatch:
     types:
       - specmatic-enterprise-jar-ready
@@ -41,7 +50,11 @@ permissions:
 
 jobs:
   run-orchestrator:
-    runs-on: ubuntu-latest
+    name: run-orchestrator (${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
+    runs-on: ${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
+    defaults:
+      run:
+        shell: bash
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
@@ -56,7 +69,7 @@ jobs:
       - name: Normalize workflow inputs
         run: |
           set -euo pipefail
-          python3 - <<'PY'
+          python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -88,6 +101,7 @@ jobs:
               "ENTERPRISE_STATUS_CONTEXT": pick("enterprise_status_context"),
               "ENTERPRISE_STATUS_TARGET_URL": pick("enterprise_status_target_url"),
               "ENTERPRISE_VERSION": pick("enterprise_version"),
+              "ENTERPRISE_CONFIGURATION": pick("enterprise_configuration", default="ubuntu-latest"),
               "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
@@ -106,6 +120,14 @@ jobs:
           : "${ENTERPRISE_REPOSITORY:?ENTERPRISE_REPOSITORY is required}"
           : "${ENTERPRISE_SHA:?ENTERPRISE_SHA is required}"
           : "${ENTERPRISE_VERSION:?ENTERPRISE_VERSION is required}"
+          case "${ENTERPRISE_CONFIGURATION}" in
+            ubuntu-latest|windows-latest) ;;
+            *)
+              echo "Unsupported ENTERPRISE_CONFIGURATION: ${ENTERPRISE_CONFIGURATION}"
+              exit 1
+              ;;
+          esac
+          echo "Running orchestrated tests on ${ENTERPRISE_CONFIGURATION}"
 
       - name: Download the Enterprise jar
         if: env.SPECMATIC_JAR_URL != ''
@@ -137,7 +159,7 @@ jobs:
           export ENTERPRISE_VERSION
           export ORCHESTRATOR_TEST_EXECUTOR_PATH
           export SPEC_OUTPUTS_DIR
-          python3 scripts/run-orchestration-test.py \
+          python scripts/run-orchestration-test.py \
             --config "${ORCHESTRATOR_TEST_EXECUTOR_PATH:-}" \
             --outputs-dir "$SPEC_OUTPUTS_DIR" \
             --specmatic-jar-url "$SPECMATIC_JAR_URL" \
@@ -157,7 +179,7 @@ jobs:
           ENABLE_CHECK_RUNS: "false"
         run: |
           set -euo pipefail
-          python3 scripts/bridge_to_enterprise.py
+          python scripts/bridge_to_enterprise.py
 
       - name: Fail workflow if tests failed
         if: always()
