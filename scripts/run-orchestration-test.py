@@ -1226,6 +1226,10 @@ def build_command_env(
         # playwright.config.ts uses !!process.env.CI; the string "false" is truthy.
         # Keep CI empty so reuseExistingServer works when orchestrator already booted Studio.
         env["CI"] = ""
+        # Orchestrator manages Studio lifecycle; prevent playwright.config webServer auto-start.
+        env["USE_DOCKER"] = "false"
+        # CI runners typically have no display server.
+        env["HEADLESS"] = "true"
         env["PLAYWRIGHT_HTML_OPEN"] = "never"
         if not env.get("APPLITOOLS_API_KEY"):
             env["ENABLE_VISUAL"] = "false"
