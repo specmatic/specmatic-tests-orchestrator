@@ -228,7 +228,7 @@ def update_commit_status(
     repository: str,
     sha: str,
     state: str,
-    orchestrator_run_url: str,
+    target_url: str,
     description: str,
     api_base_url: str,
     context: str,
@@ -239,11 +239,16 @@ def update_commit_status(
         token,
         {
             "state": state,
-            "target_url": orchestrator_run_url,
+            "target_url": target_url,
             "description": description[:140],
             "context": context,
         },
     )
+
+
+def status_description(conclusion: str, orchestrator_run_id: str) -> str:
+    outcome = "succeeded" if conclusion in {"success", "neutral"} else "failed"
+    return f"Orchestrator run {orchestrator_run_id} {outcome}"
 
 
 def create_check_run(
@@ -318,6 +323,7 @@ def main() -> int:
     orchestrator_run_url = env("ORCHESTRATOR_RUN_URL")
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
+    enterprise_status_target_url = os.environ.get("ENTERPRISE_STATUS_TARGET_URL") or orchestrator_run_url
     api_base_url = env("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     enterprise_status_context = os.environ.get("ENTERPRISE_STATUS_CONTEXT") or status_context(
         enterprise_run_id,
@@ -339,12 +345,8 @@ def main() -> int:
             repository=enterprise_repository,
             sha=enterprise_sha,
             state="success" if conclusion in {"success", "neutral"} else "failure",
-            orchestrator_run_url=orchestrator_run_url,
-            description=(
-                "Specmatic orchestrator completed successfully"
-                if conclusion in {"success", "neutral"}
-                else "Specmatic orchestrator completed with failures"
-            ),
+            target_url=enterprise_status_target_url,
+            description=status_description(conclusion, orchestrator_run_id),
             api_base_url=api_base_url,
             context=enterprise_status_context,
         )

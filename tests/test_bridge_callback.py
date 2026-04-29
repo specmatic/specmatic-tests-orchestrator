@@ -181,6 +181,7 @@ class BridgeCallbackTest(unittest.TestCase):
                     "ORCHESTRATOR_RUN_URL": "http://example.local/orchestrator/run/1",
                     "ORCHESTRATOR_RUN_ID": "202",
                     "ORCHESTRATOR_RUN_ATTEMPT": "1",
+                    "ENTERPRISE_STATUS_TARGET_URL": "http://example.local/enterprise/run/101",
                     "GITHUB_API_BASE_URL": f"http://127.0.0.1:{port}",
                     "ENABLE_CHECK_RUNS": "false",
                 }
@@ -202,7 +203,8 @@ class BridgeCallbackTest(unittest.TestCase):
 
                 self.assertEqual(status["payload"]["state"], "failure")
                 self.assertEqual(status["payload"]["context"], "Orchestrator Gate for run 101 attempt 1")
-                self.assertEqual(status["payload"]["target_url"], "http://example.local/orchestrator/run/1")
+                self.assertEqual(status["payload"]["target_url"], "http://example.local/enterprise/run/101")
+                self.assertEqual(status["payload"]["description"], "Orchestrator run 202 failed")
 
                 step_summary = step_summary_path.read_text(encoding="utf-8")
                 self.assertIn("Specmatic Orchestration Result", step_summary)

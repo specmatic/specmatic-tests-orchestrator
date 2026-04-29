@@ -228,6 +228,18 @@ class RunOrchestrationTest(unittest.TestCase):
         self.assertEqual(artifact.version, "1.12.1-SNAPSHOT")
         self.assertEqual(artifact.jar_url, jar_url)
 
+    def test_validate_required_enterprise_version_accepts_existing_executable_artifact_url(self) -> None:
+        error = run_orchestration_test.validate_required_enterprise_version(
+            mock.Mock(
+                enterprise_version=(
+                    "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable/"
+                    "1.12.1-SNAPSHOT/executable-1.12.1-20260427.120947-1.jar"
+                )
+            )
+        )
+
+        self.assertEqual(error, "")
+
     def test_resolve_enterprise_artifact_inputs_preserves_explicit_dummy_jar_url(self) -> None:
         artifact = run_orchestration_test.resolve_enterprise_artifact_inputs(
             "0.0.0-DUMMY",
