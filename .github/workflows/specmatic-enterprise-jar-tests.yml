@@ -86,6 +86,7 @@ jobs:
               "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),
               "ENTERPRISE_RUN_ATTEMPT": pick("enterprise_run_attempt"),
               "ENTERPRISE_STATUS_CONTEXT": pick("enterprise_status_context"),
+              "ENTERPRISE_STATUS_TARGET_URL": pick("enterprise_status_target_url"),
               "ENTERPRISE_VERSION": pick("enterprise_version"),
               "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
               "SPEC_OUTPUTS_DIR": "outputs",
