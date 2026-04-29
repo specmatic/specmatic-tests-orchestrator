@@ -1324,6 +1324,10 @@ def write_enterprise_maven_repo(repo_dir: Path, jar_path: Path, enterprise_versi
     return repo_dir.resolve().as_uri()
 
 
+def has_explicit_enterprise_jar_source(config: CliSetupConfig) -> bool:
+    return bool(config.jar_path or config.jar_url)
+
+
 def copy_result_paths(repo_dir: Path, output_dir: Path, patterns: list[str]) -> list[str]:
     copied: list[str] = []
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1505,6 +1509,7 @@ def execute_workflow_commands(
         enterprise_version.endswith("-SNAPSHOT")
         and has_gradle_command
         and not snapshot_repo_url
+        and has_explicit_enterprise_jar_source(cli_setup_config)
         and not dry_run
     ):
         ok, setup_details, jar_path = ensure_enterprise_jar_available(cli_setup_config, log_file=log_file, dry_run=dry_run)
