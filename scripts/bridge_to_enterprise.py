@@ -63,6 +63,35 @@ def as_int(value: Any) -> int | None:
     return None
 
 
+def top_level_int(summary: dict[str, Any], key: str) -> int | None:
+    return as_int(summary.get(key))
+
+
+def sum_result_ints(summary: dict[str, Any], key: str) -> int | None:
+    results = summary.get("results")
+    if not isinstance(results, list):
+        return None
+
+    total = 0
+    found = False
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        value = as_int(result.get(key))
+        if value is None:
+            continue
+        total += value
+        found = True
+    return total if found else None
+
+
+def summary_count(summary: dict[str, Any], key: str) -> int | None:
+    value = top_level_int(summary, key)
+    if value is not None:
+        return value
+    return sum_result_ints(summary, key)
+
+
 def infer_conclusion(summary: dict[str, Any]) -> str:
     def normalized(text: Any) -> str | None:
         if not isinstance(text, str):
@@ -96,13 +125,13 @@ def infer_conclusion(summary: dict[str, Any]) -> str:
 def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
     raw_summary = render_json(summary)
     excerpt = raw_summary if len(raw_summary) <= 3500 else raw_summary[:3450] + "\n... truncated for display ..."
-    total_workflows = summary.get("total")
-    passed_workflows = summary.get("passed_count")
-    failed_workflows = summary.get("failed_count")
-    total_tests = pick_first(summary, ["total_tests", "total_count", "tests_total", "num_tests"])
-    failed_tests = pick_first(summary, ["failed_tests", "failures", "error_count"])
-    skipped_tests = pick_first(summary, ["skipped_tests", "skipped", "skipped_count"])
-    duration = pick_first(summary, ["duration_seconds", "duration", "elapsed", "elapsed_seconds", "runtime_seconds"])
+    total_workflows = summary_count(summary, "total")
+    passed_workflows = summary_count(summary, "passed_count")
+    failed_workflows = summary_count(summary, "failed_count")
+    total_tests = summary_count(summary, "total_tests")
+    failed_tests = summary_count(summary, "failed_tests")
+    skipped_tests = summary_count(summary, "skipped_tests")
+    duration = summary_count(summary, "duration_seconds")
 
     rows = [
         ("Conclusion", conclusion),

@@ -132,6 +132,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 json.dumps(
                     {
                         "conclusion": "failure",
+                        "total": 2,
                         "passed_count": 0,
                         "failed_count": 2,
                         "total_tests": 233,
@@ -205,7 +206,7 @@ class BridgeCallbackTest(unittest.TestCase):
 
                 step_summary = step_summary_path.read_text(encoding="utf-8")
                 self.assertIn("Specmatic Orchestration Result", step_summary)
-                self.assertIn("| Total workflows | n/a |", step_summary)
+                self.assertIn("| Total workflows | 2 |", step_summary)
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
                 self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | failed | 227 | 5 | 4 |", step_summary)
@@ -248,6 +249,52 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
         self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | command_failed | 0 | 0 | 0 | 3 command(s) failed |", markdown)
+
+    def test_summary_markdown_uses_root_test_counts_before_nested_values(self) -> None:
+        summary = {
+            "conclusion": "failure",
+            "total": 2,
+            "passed_count": 0,
+            "failed_count": 2,
+            "total_tests": 233,
+            "failed_tests": 6,
+            "skipped_tests": 5,
+            "results": [
+                {
+                    "type": "sample-project",
+                    "repository": "contract-tests",
+                    "workflow": ".github/workflows/gradle.yml",
+                    "status": "failed",
+                    "total_tests": 227,
+                    "failed_tests": 5,
+                    "skipped_tests": 4,
+                    "duration_seconds": 118,
+                },
+                {
+                    "type": "sample-project",
+                    "repository": "asyncapi-tests",
+                    "workflow": ".github/workflows/gradle.yml",
+                    "status": "failed",
+                    "total_tests": 6,
+                    "failed_tests": 1,
+                    "skipped_tests": 1,
+                    "duration_seconds": 34,
+                },
+            ],
+        }
+
+        markdown = __import__("scripts.bridge_to_enterprise", fromlist=["summary_markdown"]).summary_markdown(
+            summary,
+            "failure",
+            "http://example.local/orchestrator/run/1",
+        )
+
+        self.assertIn("| Total workflows | 2 |", markdown)
+        self.assertIn("| Failed workflows | 2 |", markdown)
+        self.assertIn("| Total tests | 233 |", markdown)
+        self.assertIn("| Failed tests | 6 |", markdown)
+        self.assertIn("| Skipped tests | 5 |", markdown)
+        self.assertIn("| Duration | 152 |", markdown)
 
 
 if __name__ == "__main__":
