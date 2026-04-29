@@ -51,6 +51,10 @@ SKIPPED_WORKFLOW_FILE_NAMES = {"playwright-enterprise-release-gate.yml"}
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 ENTERPRISE_SNAPSHOT_REPO_URL = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
 ENTERPRISE_RELEASE_REPO_URL = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
+ENTERPRISE_ARTIFACT_PATH_MARKERS = (
+    "/io/specmatic/enterprise/executable/",
+    "/io/specmatic/enterprise/executable-all",
+)
 PLAYWRIGHT_SERVICE_HEALTH_URLS = {
     "inventory-api": "http://127.0.0.1:8095/health",
     "order-api": "http://127.0.0.1:8090/products",
@@ -261,10 +265,7 @@ def is_enterprise_repository_selector(value: str) -> bool:
     fragment = parsed.fragment
     return (
         parsed.netloc == "repo.specmatic.io"
-        and (
-            "/io/specmatic/enterprise/executable-all" in path
-            or "/io/specmatic/enterprise/executable-all" in fragment
-        )
+        and any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
     )
 
 
