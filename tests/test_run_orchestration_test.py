@@ -1031,8 +1031,10 @@ jobs:
             captured_commands: list[list[str]] = []
 
             original_run_command = run_orchestration_test.run_command
+            original_cli_jar_path = run_orchestration_test.cli_jar_path
             original_ensure_enterprise_jar_available = run_orchestration_test.ensure_enterprise_jar_available
             try:
+                run_orchestration_test.cli_jar_path = lambda: temp_dir / ".specmatic" / "missing.jar"
                 run_orchestration_test.ensure_enterprise_jar_available = mock.Mock(
                     side_effect=AssertionError("should not prepare a local Maven repo without an explicit jar source")
                 )
@@ -1069,6 +1071,7 @@ jobs:
                 )
             finally:
                 run_orchestration_test.run_command = original_run_command
+                run_orchestration_test.cli_jar_path = original_cli_jar_path
                 run_orchestration_test.ensure_enterprise_jar_available = original_ensure_enterprise_jar_available
 
             self.assertEqual(status, run_orchestration_test.STATUS_PASSED)
@@ -1078,6 +1081,89 @@ jobs:
             self.assertIn("-PspecmaticEnterpriseVersion=1.12.1-SNAPSHOT", captured_commands[0])
             self.assertIn("-PenterpriseVersion=1.12.1-SNAPSHOT", captured_commands[0])
             self.assertFalse(any(arg.startswith("-PsnapshotRepoUrl=") for arg in captured_commands[0]))
+
+    def test_snapshot_gradle_run_with_installer_prepares_local_maven_repo(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            repo_dir = temp_dir / "repo"
+            repo_dir.mkdir()
+            gradlew = repo_dir / "gradlew"
+            gradlew.write_text("#!/bin/sh\n", encoding="utf-8")
+            output_dir = temp_dir / "outputs"
+            log_file = output_dir / "run.log"
+            output_dir.mkdir()
+            log_file.write_text("", encoding="utf-8")
+            target_jar = temp_dir / ".specmatic" / "specmatic-enterprise.jar"
+            commands = [
+                run_orchestration_test.WorkflowCommand(
+                    workflow_file=".github/workflows/gradle.yml",
+                    step_name="Run tests",
+                    command="./gradlew test",
+                    working_directory=".",
+                    needs_cli_install=False,
+                )
+            ]
+            captured_commands: list[list[str]] = []
+            installed_versions: list[str] = []
+
+            original_run_command = run_orchestration_test.run_command
+            original_cli_jar_path = run_orchestration_test.cli_jar_path
+            original_ensure_enterprise_jar_available = run_orchestration_test.ensure_enterprise_jar_available
+            try:
+                run_orchestration_test.cli_jar_path = lambda: target_jar
+
+                def fake_ensure(config, log_file, dry_run):
+                    if target_jar.exists():
+                        return True, "installed", target_jar
+                    return False, "missing", None
+
+                def fake_run_command(command, cwd, env, log_file):
+                    if command[:2] == ["bash", "-lc"]:
+                        installed_versions.append(command[2])
+                        target_jar.parent.mkdir(parents=True)
+                        with zipfile.ZipFile(target_jar, "w") as jar:
+                            jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
+                        return 0
+                    captured_commands.append(command)
+                    return 0
+
+                run_orchestration_test.ensure_enterprise_jar_available = fake_ensure
+                run_orchestration_test.run_command = fake_run_command
+                status, details, exit_code, executed = run_orchestration_test.execute_workflow_commands(
+                    executor=run_orchestration_test.TestExecutor(
+                        type="sample-project",
+                        github_url="https://example.com/repo.git",
+                        name="repo",
+                        branch="main",
+                        description="",
+                        workflow_globs=[],
+                        workflow_files=[],
+                        command=[],
+                        result_paths=[],
+                    ),
+                    repo_dir=repo_dir,
+                    output_dir=output_dir,
+                    log_file=log_file,
+                    workflow_label=".github/workflows/gradle.yml",
+                    commands=commands,
+                    cli_setup_config=run_orchestration_test.CliSetupConfig(
+                        jar_url="",
+                        jar_path="",
+                        allow_installer=True,
+                    ),
+                    dry_run=False,
+                    enterprise_version="1.12.1-SNAPSHOT",
+                )
+            finally:
+                run_orchestration_test.run_command = original_run_command
+                run_orchestration_test.cli_jar_path = original_cli_jar_path
+                run_orchestration_test.ensure_enterprise_jar_available = original_ensure_enterprise_jar_available
+
+            self.assertEqual(status, run_orchestration_test.STATUS_PASSED)
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(executed), 1)
+            self.assertEqual(len(captured_commands), 1)
+            self.assertTrue(any("--version 1.12.1-SNAPSHOT" in command for command in installed_versions))
+            self.assertTrue(any(arg.startswith("-PsnapshotRepoUrl=") for arg in captured_commands[0]))
 
     def test_keeps_command_failed_for_non_test_execution_failures(self) -> None:
         status, details = run_orchestration_test.classify_final_status(

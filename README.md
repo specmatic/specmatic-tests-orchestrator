@@ -24,6 +24,11 @@ The workflow expects the following environment/input values:
 - `ENTERPRISE_RUN_ID`: originating Enterprise workflow run id
 - `ENTERPRISE_RUN_ATTEMPT`: originating Enterprise workflow run attempt
 
+For snapshot versions, the GitHub workflow installs the requested Enterprise
+version and creates a temporary local Maven repository before running Gradle
+sample-project tests. This mirrors a developer machine that already has the
+snapshot in the local Maven cache.
+
 The default workflow layout is:
 
 - `outputs/` for per-source result subfolders

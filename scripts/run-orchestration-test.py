@@ -1287,13 +1287,18 @@ def ensure_enterprise_jar_available(config: CliSetupConfig, log_file: Path, dry_
     return False, "Specmatic Enterprise jar not found. Provide --specmatic-jar-path, --specmatic-jar-url, or install ~/.specmatic/specmatic-enterprise.jar.", None
 
 
-def prepare_cli_dependency(config: CliSetupConfig, log_file: Path, dry_run: bool) -> tuple[bool, str]:
+def prepare_cli_dependency(config: CliSetupConfig, log_file: Path, dry_run: bool, enterprise_version: str = "") -> tuple[bool, str]:
     ok, details, _ = ensure_enterprise_jar_available(config, log_file=log_file, dry_run=dry_run)
     if ok:
         return True, details
 
     if config.allow_installer and os.name != "nt":
-        command = ["bash", "-lc", "curl https://docs.specmatic.io/install-specmatic-enterprise.sh | bash"]
+        installer_args = f" -- --version {shlex.quote(enterprise_version)}" if enterprise_version else ""
+        command = [
+            "bash",
+            "-lc",
+            f"curl -fsSL https://docs.specmatic.io/install-specmatic-enterprise.sh | bash{installer_args}",
+        ]
         exit_code = run_command(command, cwd=None, env=os.environ.copy(), log_file=log_file)
         target_jar = cli_jar_path()
         if exit_code == 0 and target_jar.exists():
@@ -1330,6 +1335,10 @@ def write_enterprise_maven_repo(repo_dir: Path, jar_path: Path, enterprise_versi
 
 def has_explicit_enterprise_jar_source(config: CliSetupConfig) -> bool:
     return bool(config.jar_path or config.jar_url)
+
+
+def can_prepare_enterprise_maven_repo(config: CliSetupConfig) -> bool:
+    return has_explicit_enterprise_jar_source(config) or config.allow_installer or cli_jar_path().exists()
 
 
 def copy_result_paths(repo_dir: Path, output_dir: Path, patterns: list[str]) -> list[str]:
@@ -1513,10 +1522,18 @@ def execute_workflow_commands(
         enterprise_version.endswith("-SNAPSHOT")
         and has_gradle_command
         and not snapshot_repo_url
-        and has_explicit_enterprise_jar_source(cli_setup_config)
+        and can_prepare_enterprise_maven_repo(cli_setup_config)
         and not dry_run
     ):
         ok, setup_details, jar_path = ensure_enterprise_jar_available(cli_setup_config, log_file=log_file, dry_run=dry_run)
+        if not ok and cli_setup_config.allow_installer:
+            ok, setup_details = prepare_cli_dependency(
+                cli_setup_config,
+                log_file=log_file,
+                dry_run=dry_run,
+                enterprise_version=enterprise_version,
+            )
+            jar_path = cli_jar_path() if ok else None
         if not ok or jar_path is None:
             details = (
                 f"could not prepare local Maven repository for "
@@ -1549,7 +1566,12 @@ def execute_workflow_commands(
 
         if workflow_command.needs_cli_install and not cli_ready:
             setup_started = time.time()
-            ok, setup_details = prepare_cli_dependency(cli_setup_config, log_file=log_file, dry_run=dry_run)
+            ok, setup_details = prepare_cli_dependency(
+                cli_setup_config,
+                log_file=log_file,
+                dry_run=dry_run,
+                enterprise_version=enterprise_version,
+            )
             if not ok:
                 duration_seconds = int(time.time() - setup_started)
                 executed.append(

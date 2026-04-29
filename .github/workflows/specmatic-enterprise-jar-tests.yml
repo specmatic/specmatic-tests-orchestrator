@@ -143,6 +143,7 @@ jobs:
             --outputs-dir "$SPEC_OUTPUTS_DIR" \
             --specmatic-jar-url "" \
             --specmatic-jar-path "" \
+            --allow-cli-installer \
             --enterprise-version "$ENTERPRISE_VERSION"
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
