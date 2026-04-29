@@ -1297,7 +1297,7 @@ def prepare_cli_dependency(config: CliSetupConfig, log_file: Path, dry_run: bool
         command = [
             "bash",
             "-lc",
-            f"curl -fsSL https://docs.specmatic.io/install-specmatic-enterprise.sh | bash{installer_args}",
+            f"curl -fsSL https://docs.specmatic.io/install-specmatic-enterprise.sh | bash -s{installer_args}",
         ]
         exit_code = run_command(command, cwd=None, env=os.environ.copy(), log_file=log_file)
         target_jar = cli_jar_path()

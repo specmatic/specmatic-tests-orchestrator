@@ -136,14 +136,11 @@ jobs:
           export ENTERPRISE_VERSION
           export ORCHESTRATOR_TEST_EXECUTOR_PATH
           export SPEC_OUTPUTS_DIR
-          unset SPECMATIC_JAR_URL
-          unset SPECMATIC_JAR_PATH
           python3 scripts/run-orchestration-test.py \
             --config "${ORCHESTRATOR_TEST_EXECUTOR_PATH:-}" \
             --outputs-dir "$SPEC_OUTPUTS_DIR" \
-            --specmatic-jar-url "" \
-            --specmatic-jar-path "" \
-            --allow-cli-installer \
+            --specmatic-jar-url "$SPECMATIC_JAR_URL" \
+            --specmatic-jar-path "$SPECMATIC_JAR_PATH" \
             --enterprise-version "$ENTERPRISE_VERSION"
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
