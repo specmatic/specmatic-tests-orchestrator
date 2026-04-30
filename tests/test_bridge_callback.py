@@ -50,7 +50,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
 
 class BridgeCallbackTest(unittest.TestCase):
-    def test_bridge_posts_status_and_check_run_to_local_server(self) -> None:
+    def test_bridge_posts_status_to_local_server_with_pat_only_callback(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -72,7 +72,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            server = _CallbackServer(("127.0.0.1", 0))
+            server = _CallbackServer(("127.0.0.1", 0), expected_requests=1)
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -90,7 +90,6 @@ class BridgeCallbackTest(unittest.TestCase):
                     "ORCHESTRATOR_RUN_ID": "202",
                     "ORCHESTRATOR_RUN_ATTEMPT": "1",
                     "GITHUB_API_BASE_URL": f"http://127.0.0.1:{port}",
-                    "ENABLE_CHECK_RUNS": "true",
                 }
             )
 
@@ -104,19 +103,14 @@ class BridgeCallbackTest(unittest.TestCase):
                     text=True,
                 )
 
-                self.assertTrue(server.event.wait(5), "timed out waiting for callback POSTs")
-                self.assertEqual(len(server.requests), 2)
+                self.assertTrue(server.event.wait(5), "timed out waiting for status POST")
+                self.assertEqual(len(server.requests), 1)
 
                 status = next(request for request in server.requests if request["path"].endswith("/statuses/abc123def456"))
-                check_run = next(request for request in server.requests if request["path"].endswith("/check-runs"))
 
                 self.assertEqual(status["payload"]["state"], "success")
                 self.assertEqual(status["payload"]["context"], "Orchestrator Gate for run 101 attempt 1")
-                self.assertEqual(check_run["payload"]["head_sha"], "abc123def456")
-                self.assertEqual(check_run["payload"]["name"], "Orchestrator Gate for run 101 attempt 1")
-                self.assertEqual(check_run["payload"]["conclusion"], "success")
-                self.assertEqual(check_run["payload"]["status"], "completed")
-                self.assertNotIn("Summary JSON excerpt", check_run["payload"]["output"]["summary"])
+                self.assertEqual(status["payload"]["target_url"], "http://example.local/orchestrator/run/1")
             finally:
                 server.shutdown()
                 server.server_close()
