@@ -1391,6 +1391,8 @@ def build_command_env(
             env["ENABLE_VISUAL"] = "true" if enable_visual in {"1","true","yes","on"} else "false"
         else:
             disable_visual = os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true").strip().lower()
+            env["ENABLE_VISUAL"] = "false" if disable_visual in {"1","true","yes","on"} else "true"
+            
         env["SPECMATIC_STUDIO_JAR_URL"] = ""
         env["SPECMATIC_JAR_URL"] = ""
         env["SPECMATIC_JAR_PATH"] = ""
