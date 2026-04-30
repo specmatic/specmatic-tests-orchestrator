@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -280,6 +281,46 @@ def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
 
 
+def github_curl_request(method: str, url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
+    completed = subprocess.run(
+        [
+            "curl",
+            "-sS",
+            "-X",
+            method,
+            "-H",
+            f"Authorization: Bearer {token}",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            json.dumps(payload),
+            "-w",
+            "\n%{http_code}",
+            url,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"curl failed ({completed.returncode}): {completed.stderr.strip()}")
+
+    body, _, status_text = completed.stdout.rpartition("\n")
+    try:
+        status = int(status_text)
+    except ValueError as exc:
+        raise RuntimeError(f"curl returned an invalid HTTP status: {completed.stdout}") from exc
+
+    if status >= 400:
+        raise RuntimeError(f"GitHub API request failed ({status}): {body}")
+
+    return json.loads(body) if body.strip() else {}
+
+
 def status_context(run_id: str | None, run_attempt: str | None) -> str:
     return f"Orchestrator Gate for run {run_id or 'unknown'} attempt {run_attempt or 'unknown'}"
 
@@ -294,7 +335,7 @@ def update_commit_status(
     api_base_url: str,
     context: str,
 ) -> None:
-    github_request(
+    github_curl_request(
         "POST",
         f"{api_base_url}/repos/{repository}/statuses/{sha}",
         token,
@@ -402,7 +443,6 @@ def main() -> int:
         enterprise_run_id,
         enterprise_run_attempt,
     )
-    enable_check_runs = env("ENABLE_CHECK_RUNS", "false").strip().lower() in {"1", "true", "yes"}
     enable_repository_dispatch = env("ENABLE_REPOSITORY_DISPATCH_CALLBACK", "false").strip().lower() in {"1", "true", "yes"}
 
     print(f"Inferred conclusion: {conclusion}")
@@ -427,33 +467,7 @@ def main() -> int:
     except Exception as exc:
         errors.append(f"commit status: {exc}")
 
-    if enable_check_runs:
-        try:
-            print("Check run payload:")
-            print(render_json({
-                "repository": enterprise_repository,
-                "head_sha": enterprise_sha,
-                "conclusion": conclusion,
-                "details_url": orchestrator_run_url,
-                "summary_excerpt": summary_markdown(summary, conclusion, orchestrator_run_url),
-            }))
-            create_check_run(
-                token=callback_token,
-                repository=enterprise_repository,
-                head_sha=enterprise_sha,
-                conclusion=conclusion,
-                orchestrator_run_url=orchestrator_run_url,
-                summary=summary,
-                api_base_url=api_base_url,
-                enterprise_run_id=enterprise_run_id,
-                enterprise_run_attempt=enterprise_run_attempt,
-                name=enterprise_status_context,
-            )
-            print("Created Enterprise check run.")
-        except Exception as exc:
-            errors.append(f"check run: {exc}")
-    else:
-        print("Skipping check run creation.")
+    print("Skipping check run creation because this callback uses a PAT and the Checks API requires a GitHub App.")
 
     if enable_repository_dispatch:
         try:
