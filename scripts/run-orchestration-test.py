@@ -1386,9 +1386,11 @@ def build_command_env(
         env["SPECMATIC_STUDIO_DOCKER_IMAGE"] = enterprise_docker_image
     if is_playwright_executor(executor):
         env["SPECMATIC_TEST_ORCHESTRATOR"] = "true"
-        disable_visual = os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true").strip().lower()
-        env["ORCHESTRATOR_DISABLE_VISUAL"] = "true" if disable_visual in {"1", "true", "yes", "on"} else "false"
-        # Keep jar vars empty so orchestrator-managed runtime is always used.
+        enable_visual = os.environ.get("ENABLE_VISUAL", "").strip().lower()
+        if enable_visual:
+            env["ENABLE_VISUAL"] = "true" if enable_visual in {"1","true","yes","on"} else "false"
+        else:
+            disable_visual = os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true").strip().lower()
         env["SPECMATIC_STUDIO_JAR_URL"] = ""
         env["SPECMATIC_JAR_URL"] = ""
         env["SPECMATIC_JAR_PATH"] = ""

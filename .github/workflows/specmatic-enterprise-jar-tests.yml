@@ -57,6 +57,10 @@ jobs:
         shell: bash
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      APPLITOOLS_API_KEY: ${{ secrets.APPLITOOLS_API_KEY }}
+      SPECMATIC_LICENSE_KEY: ${{ secrets.SPECMATIC_LICENSE_KEY }}
+
+      ORCHESTRATOR_DISABLE_VISUAL: "false"
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v5
@@ -65,6 +69,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Set up Specmatic License key
+        run: |
+          echo "Write specmatic license key to file"
+          mkdir -p ~/.specmatic
+          echo "${{ secrets.SPECMATIC_LICENSE_KEY }}" > ~/.specmatic/specmatic-license.txt
 
       - name: Normalize workflow inputs
         run: |
