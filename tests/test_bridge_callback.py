@@ -113,8 +113,10 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertEqual(status["payload"]["state"], "success")
                 self.assertEqual(status["payload"]["context"], "Orchestrator Gate for run 101 attempt 1")
                 self.assertEqual(check_run["payload"]["head_sha"], "abc123def456")
+                self.assertEqual(check_run["payload"]["name"], "Orchestrator Gate for run 101 attempt 1")
                 self.assertEqual(check_run["payload"]["conclusion"], "success")
                 self.assertEqual(check_run["payload"]["status"], "completed")
+                self.assertNotIn("Summary JSON excerpt", check_run["payload"]["output"]["summary"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -203,8 +205,8 @@ class BridgeCallbackTest(unittest.TestCase):
 
                 self.assertEqual(status["payload"]["state"], "failure")
                 self.assertEqual(status["payload"]["context"], "Orchestrator Gate for run 101 attempt 1")
-                self.assertEqual(status["payload"]["target_url"], "http://example.local/enterprise/run/101")
-                self.assertEqual(status["payload"]["description"], "Orchestrator run 202 failed")
+                self.assertEqual(status["payload"]["target_url"], "http://example.local/orchestrator/run/1")
+                self.assertEqual(status["payload"]["description"], "Orchestrator run 202 failed: 233 tests, 6 failed, 5 skipped")
 
                 step_summary = step_summary_path.read_text(encoding="utf-8")
                 self.assertIn("Specmatic Orchestration Result", step_summary)
@@ -251,6 +253,23 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
         self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | command_failed | 0 | 0 | 0 | 3 command(s) failed |", markdown)
+
+    def test_compact_summary_markdown_does_not_include_raw_json_excerpt(self) -> None:
+        markdown = __import__("scripts.bridge_to_enterprise", fromlist=["compact_summary_markdown"]).compact_summary_markdown(
+            {
+                "conclusion": "failure",
+                "total": 1,
+                "failed_count": 1,
+                "total_tests": 3,
+                "failed_tests": 1,
+            },
+            "failure",
+            "http://example.local/orchestrator/run/1",
+        )
+
+        self.assertIn("| Total tests | 3 |", markdown)
+        self.assertNotIn("Summary JSON excerpt", markdown)
+        self.assertNotIn("```json", markdown)
 
     def test_summary_markdown_uses_root_test_counts_before_nested_values(self) -> None:
         summary = {

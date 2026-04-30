@@ -191,6 +191,67 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
     return "\n".join(body)
 
 
+def compact_summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
+    total_workflows = summary_count(summary, "total")
+    passed_workflows = summary_count(summary, "passed_count")
+    failed_workflows = summary_count(summary, "failed_count")
+    total_tests = summary_count(summary, "total_tests")
+    failed_tests = summary_count(summary, "failed_tests")
+    skipped_tests = summary_count(summary, "skipped_tests")
+    duration = summary_count(summary, "duration_seconds")
+
+    rows = [
+        ("Conclusion", conclusion),
+        ("Total workflows", total_workflows if total_workflows is not None else "n/a"),
+        ("Passed workflows", passed_workflows if passed_workflows is not None else "n/a"),
+        ("Failed workflows", failed_workflows if failed_workflows is not None else "n/a"),
+        ("Total tests", total_tests if total_tests is not None else "n/a"),
+        ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
+        ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
+        ("Duration", duration if duration is not None else "n/a"),
+        ("Orchestrator run", orchestrator_run_url),
+    ]
+
+    body = ["| Key | Value |", "| --- | --- |"]
+    for key, value in rows:
+        body.append(f"| {key} | {value} |")
+
+    results = summary.get("results")
+    if isinstance(results, list) and results:
+        body.extend(
+            [
+                "",
+                "Workflow results:",
+                "",
+                "| Repository | Workflow | Status | Tests | Failed | Skipped | Details |",
+                "| --- | --- | --- | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
+            details = str(result.get("details") or "").replace("|", "\\|")
+            if len(details) > 180:
+                details = details[:177] + "..."
+            body.append(
+                "| "
+                + " | ".join(
+                    [
+                        repository or "n/a",
+                        str(result.get("workflow", "n/a")),
+                        str(result.get("status", "n/a")),
+                        str(result.get("total_tests", "n/a")),
+                        str(result.get("failed_tests", "n/a")),
+                        str(result.get("skipped_tests", "n/a")),
+                        details or "n/a",
+                    ]
+                )
+                + " |"
+            )
+    return "\n".join(body)
+
+
 def append_workflow_summary(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> None:
     step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not step_summary_path:
@@ -251,6 +312,18 @@ def status_description(conclusion: str, orchestrator_run_id: str) -> str:
     return f"Orchestrator run {orchestrator_run_id} {outcome}"
 
 
+def compact_status_description(conclusion: str, orchestrator_run_id: str, summary: dict[str, Any]) -> str:
+    total_tests = summary_count(summary, "total_tests")
+    failed_tests = summary_count(summary, "failed_tests")
+    skipped_tests = summary_count(summary, "skipped_tests")
+    outcome = "succeeded" if conclusion in {"success", "neutral"} else "failed"
+    if total_tests is None:
+        return status_description(conclusion, orchestrator_run_id)
+    failed = failed_tests if failed_tests is not None else 0
+    skipped = skipped_tests if skipped_tests is not None else 0
+    return f"Orchestrator run {orchestrator_run_id} {outcome}: {total_tests} tests, {failed} failed, {skipped} skipped"
+
+
 def create_check_run(
     token: str,
     repository: str,
@@ -261,18 +334,19 @@ def create_check_run(
     api_base_url: str,
     enterprise_run_id: str | None,
     enterprise_run_attempt: str | None,
+    name: str,
 ) -> None:
     run_id = enterprise_run_id or "unknown"
     attempt = enterprise_run_attempt or "unknown"
     payload = {
-        "name": "Specmatic orchestrator",
+        "name": name,
         "head_sha": head_sha,
         "status": "completed",
         "conclusion": conclusion,
         "details_url": orchestrator_run_url,
         "output": {
             "title": f"Specmatic orchestrator for run {run_id} attempt {attempt}",
-            "summary": summary_markdown(summary, conclusion, orchestrator_run_url),
+            "summary": compact_summary_markdown(summary, conclusion, orchestrator_run_url),
         },
     }
     github_request("POST", f"{api_base_url}/repos/{repository}/check-runs", token, payload)
@@ -323,7 +397,6 @@ def main() -> int:
     orchestrator_run_url = env("ORCHESTRATOR_RUN_URL")
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
-    enterprise_status_target_url = os.environ.get("ENTERPRISE_STATUS_TARGET_URL") or orchestrator_run_url
     api_base_url = env("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
     enterprise_status_context = os.environ.get("ENTERPRISE_STATUS_CONTEXT") or status_context(
         enterprise_run_id,
@@ -345,8 +418,8 @@ def main() -> int:
             repository=enterprise_repository,
             sha=enterprise_sha,
             state="success" if conclusion in {"success", "neutral"} else "failure",
-            target_url=enterprise_status_target_url,
-            description=status_description(conclusion, orchestrator_run_id),
+            target_url=orchestrator_run_url,
+            description=compact_status_description(conclusion, orchestrator_run_id, summary),
             api_base_url=api_base_url,
             context=enterprise_status_context,
         )
@@ -374,6 +447,7 @@ def main() -> int:
                 api_base_url=api_base_url,
                 enterprise_run_id=enterprise_run_id,
                 enterprise_run_attempt=enterprise_run_attempt,
+                name=enterprise_status_context,
             )
             print("Created Enterprise check run.")
         except Exception as exc:
