@@ -1825,6 +1825,46 @@ def run_workflow_command_set(
     started_at = utc_now()
     started = time.time()
     log_progress(f"  -> workflow {workflow_label} ({len(commands)} runnable command{'s' if len(commands) != 1 else ''})")
+    playwright_runtime_started = False
+    playwright_jar_mode = is_playwright_jar_mode(cli_setup_config)
+    if is_playwright_executor(executor):
+        log_progress("     starting playwright support services for workflow")
+        runtime_ok, runtime_details = start_playwright_support_runtime(
+            executor=executor,
+            repo_dir=repo_dir,
+            outputs_dir=outputs_dir,
+            jar_mode=playwright_jar_mode,
+            cli_setup_config=cli_setup_config,
+            dry_run=dry_run,
+        )
+        if not runtime_ok:
+            duration_seconds = int(time.time() - started)
+            finished_at = utc_now()
+            result = WorkflowResult(
+                type=executor.type,
+                repository=executor.name,
+                repo_url=executor.github_url,
+                branch=executor.branch,
+                workflow=workflow_label,
+                status=STATUS_SETUP_FAILED,
+                exit_code=1,
+                duration_seconds=duration_seconds,
+                commands=[command.command for command in commands],
+                executed_commands=[],
+                output_dir=str(output_dir),
+                log_file=str(log_file),
+                copied_result_paths=[],
+                total_tests=0,
+                failed_tests=0,
+                skipped_tests=0,
+                started_at=started_at,
+                finished_at=finished_at,
+                details=runtime_details,
+            )
+            write_json(output_dir / "result.json", asdict(result))
+            return result
+        playwright_runtime_started = True
+        log_progress(f"     {runtime_details}")
     manage_shared_containers = should_cleanup_shared_containers(executor)
     if manage_shared_containers:
         cleanup_playwright_containers(log_file, "before")
@@ -1861,6 +1901,14 @@ def run_workflow_command_set(
     finally:
         if manage_shared_containers:
             cleanup_playwright_containers(log_file, "after")
+        if playwright_runtime_started:
+            log_progress("     stopping playwright support services for workflow")
+            stop_playwright_support_runtime(
+                executor=executor,
+                repo_dir=repo_dir,
+                outputs_dir=outputs_dir,
+                jar_mode=playwright_jar_mode,
+            )
 
     duration_seconds = int(time.time() - started)
     finished_at = utc_now()
@@ -2004,77 +2052,50 @@ def run_executor(
     if setup_status != STATUS_PASSED:
         return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
 
-    runtime_started = False
-    playwright_jar_mode = is_playwright_jar_mode(cli_setup_config)
-    if is_playwright_executor(executor):
-        log_progress("    starting playwright support services")
-        runtime_ok, runtime_details = start_playwright_support_runtime(
-            executor=executor,
-            repo_dir=repo_dir,
-            outputs_dir=outputs_dir,
-            jar_mode=playwright_jar_mode,
-            cli_setup_config=cli_setup_config,
-            dry_run=dry_run,
-        )
-        if not runtime_ok:
-            return [synthetic_result(executor, outputs_dir, "_runtime", STATUS_SETUP_FAILED, runtime_details, 1)]
-        runtime_started = True
-        log_progress(f"    {runtime_details}")
-
-    try:
-        if executor.command:
-            return [
-                run_workflow_command_set(
-                    executor=executor,
-                    repo_dir=repo_dir,
-                    outputs_dir=outputs_dir,
-                    workflow_label="_configured",
-                    commands=configured_workflow_commands(executor),
-                    cli_setup_config=cli_setup_config,
-                    dry_run=dry_run,
-                    specmatic_version=specmatic_version,
-                    enterprise_version=enterprise_version,
-                    enterprise_docker_image=enterprise_docker_image,
-                )
-            ]
-
-        workflow_files = discover_workflow_files(repo_dir, executor)
-        log_progress(f"    discovered {len(workflow_files)} workflow file{'s' if len(workflow_files) != 1 else ''}")
-        if not workflow_files:
-            return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
-
-        results: list[WorkflowResult] = []
-        for workflow_file in workflow_files:
-            if workflow_file.name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
-                continue
-            if is_reusable_only_workflow(workflow_file):
-                continue
-            commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
-            workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
-            results.append(
-                run_workflow_command_set(
-                    executor=executor,
-                    repo_dir=repo_dir,
-                    outputs_dir=outputs_dir,
-                    workflow_label=workflow_label,
-                    commands=commands,
-                    cli_setup_config=cli_setup_config,
-                    dry_run=dry_run,
-                    specmatic_version=specmatic_version,
-                    enterprise_version=enterprise_version,
-                    enterprise_docker_image=enterprise_docker_image,
-                )
-            )
-        return results
-    finally:
-        if runtime_started:
-            log_progress("    stopping playwright support services")
-            stop_playwright_support_runtime(
+    if executor.command:
+        return [
+            run_workflow_command_set(
                 executor=executor,
                 repo_dir=repo_dir,
                 outputs_dir=outputs_dir,
-                jar_mode=playwright_jar_mode,
+                workflow_label="_configured",
+                commands=configured_workflow_commands(executor),
+                cli_setup_config=cli_setup_config,
+                dry_run=dry_run,
+                specmatic_version=specmatic_version,
+                enterprise_version=enterprise_version,
+                enterprise_docker_image=enterprise_docker_image,
             )
+        ]
+
+    workflow_files = discover_workflow_files(repo_dir, executor)
+    log_progress(f"    discovered {len(workflow_files)} workflow file{'s' if len(workflow_files) != 1 else ''}")
+    if not workflow_files:
+        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
+
+    results: list[WorkflowResult] = []
+    for workflow_file in workflow_files:
+        if workflow_file.name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
+            continue
+        if is_reusable_only_workflow(workflow_file):
+            continue
+        commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
+        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+        results.append(
+            run_workflow_command_set(
+                executor=executor,
+                repo_dir=repo_dir,
+                outputs_dir=outputs_dir,
+                workflow_label=workflow_label,
+                commands=commands,
+                cli_setup_config=cli_setup_config,
+                dry_run=dry_run,
+                specmatic_version=specmatic_version,
+                enterprise_version=enterprise_version,
+                enterprise_docker_image=enterprise_docker_image,
+            )
+        )
+    return results
 
 
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
