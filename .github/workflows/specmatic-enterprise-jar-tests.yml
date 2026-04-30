@@ -61,6 +61,7 @@ jobs:
       SPECMATIC_LICENSE_KEY: ${{ secrets.SPECMATIC_LICENSE_KEY }}
 
       ORCHESTRATOR_DISABLE_VISUAL: "false"
+      ENABLE_VISUAL: "true"
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v5
