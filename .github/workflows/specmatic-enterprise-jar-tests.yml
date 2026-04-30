@@ -77,9 +77,10 @@ jobs:
           echo "${{ secrets.SPECMATIC_LICENSE_KEY }}" > ~/.specmatic/specmatic-license.txt
 
       - name: Debug Applitools
-        run: echo "Applitools key present ${APPLITOOLS_API_KEY:+YES}"
-        run: echo "ENABLE_VISUAL=$ENABLE_VISUAL"
-        run: echo "ORCHESTRATOR_DISABLE_VISUAL=$ORCHESTRATOR_DISABLE_VISUAL"
+        run: |
+          echo "Applitools key present ${APPLITOOLS_API_KEY:+YES}"
+          echo "ENABLE_VISUAL=$ENABLE_VISUAL"
+          echo "ORCHESTRATOR_DISABLE_VISUAL=$ORCHESTRATOR_DISABLE_VISUAL"
 
       - name: Normalize workflow inputs
         run: |
