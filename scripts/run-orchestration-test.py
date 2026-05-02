@@ -228,6 +228,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enterprise-docker-image", default=os.environ.get("ENTERPRISE_DOCKER_IMAGE", ""))
     parser.add_argument("--snapshot-repo-url", default=os.environ.get("SNAPSHOT_REPO_URL", ""))
     parser.add_argument("--allow-cli-installer", action="store_true", help="Allow curl/bash installer fallback for CLI matrix rows.")
+    parser.add_argument("--run-parallel", action="store_true", default=(os.environ.get("RUN_PARALLEL", "").strip().lower() in {"1", "true", "yes", "on"}), help="Dispatch discovered GitHub workflows and wait for them instead of running commands locally.")
+    parser.add_argument("--parallel-poll-seconds", type=int, default=int(os.environ.get("PARALLEL_POLL_SECONDS", "30")))
+    parser.add_argument("--parallel-timeout-seconds", type=int, default=int(os.environ.get("PARALLEL_TIMEOUT_SECONDS", "7200")))
     return parser.parse_args()
 
 
@@ -592,6 +595,235 @@ def discover_workflow_files(repo_dir: Path, executor: TestExecutor) -> list[Path
     for pattern in executor.workflow_globs:
         workflow_files.extend(repo_dir.glob(pattern))
     return sorted(dict.fromkeys(path.resolve() for path in workflow_files if path.is_file()))
+
+
+def github_repo_slug(repo_url: str) -> str:
+    parsed = urllib.parse.urlsplit(repo_url)
+    path = parsed.path if parsed.scheme else repo_url
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return ""
+    return f"{parts[-2]}/{parts[-1]}"
+
+
+def github_api_json(
+    method: str,
+    url: str,
+    token: str,
+    payload: dict[str, Any] | None = None,
+    ok_statuses: set[int] | None = None,
+) -> dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, method=method)
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    if payload is not None:
+        request.add_header("Content-Type", "application/json")
+    expected = ok_statuses or {200}
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read().decode("utf-8")
+            if response.status not in expected:
+                raise RuntimeError(f"GitHub API returned HTTP {response.status}: {body}")
+            return json.loads(body) if body.strip() else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def extract_workflow_dispatch_inputs(workflow_file: Path) -> set[str]:
+    lines = workflow_file.read_text(encoding="utf-8").splitlines()
+    inputs: set[str] = set()
+    in_dispatch = False
+    in_inputs = False
+    dispatch_indent = -1
+    inputs_indent = -1
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if stripped.startswith("workflow_dispatch:"):
+            in_dispatch = True
+            in_inputs = False
+            dispatch_indent = indent
+            continue
+        if in_dispatch and indent <= dispatch_indent and not stripped.startswith("workflow_dispatch:"):
+            break
+        if in_dispatch and stripped.startswith("inputs:"):
+            in_inputs = True
+            inputs_indent = indent
+            continue
+        if in_inputs and indent <= inputs_indent and not stripped.startswith("inputs:"):
+            break
+        if in_inputs and indent > inputs_indent and stripped.endswith(":"):
+            inputs.add(stripped[:-1].strip().strip("'\""))
+    return inputs
+
+
+def workflow_dispatch_inputs_for(
+    available_inputs: set[str],
+    specmatic_version: str,
+    enterprise_version: str,
+    enterprise_docker_image: str,
+    jar_url: str,
+    jar_path: str,
+) -> dict[str, str]:
+    candidates = {
+        "specmatic_version": specmatic_version,
+        "SPECMATIC_VERSION": specmatic_version,
+        "enterprise_version": enterprise_version,
+        "ENTERPRISE_VERSION": enterprise_version,
+        "enterprise_docker_image": enterprise_docker_image,
+        "ENTERPRISE_DOCKER_IMAGE": enterprise_docker_image,
+        "specmatic_jar_url": jar_url,
+        "SPECMATIC_JAR_URL": jar_url,
+        "specmatic_jar_path": jar_path,
+        "SPECMATIC_JAR_PATH": jar_path,
+    }
+    return {
+        key: value
+        for key, value in candidates.items()
+        if key in available_inputs and value
+    }
+
+
+def workflow_id_for_api(workflow_label: str) -> str:
+    return urllib.parse.quote(Path(workflow_label).name, safe="")
+
+
+def dispatch_github_workflow(
+    repo_slug: str,
+    workflow_label: str,
+    ref: str,
+    inputs: dict[str, str],
+    token: str,
+    api_base_url: str,
+) -> None:
+    payload: dict[str, Any] = {"ref": ref}
+    if inputs:
+        payload["inputs"] = inputs
+    github_api_json(
+        "POST",
+        f"{api_base_url}/repos/{repo_slug}/actions/workflows/{workflow_id_for_api(workflow_label)}/dispatches",
+        token,
+        payload,
+        ok_statuses={204},
+    )
+
+
+def find_dispatched_workflow_run(
+    repo_slug: str,
+    workflow_label: str,
+    branch: str,
+    dispatched_after: datetime,
+    token: str,
+    api_base_url: str,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> dict[str, Any]:
+    workflow_id = workflow_id_for_api(workflow_label)
+    started = time.time()
+    while time.time() - started < timeout_seconds:
+        query = urllib.parse.urlencode(
+            {
+                "event": "workflow_dispatch",
+                "branch": branch,
+                "per_page": "20",
+            }
+        )
+        payload = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{repo_slug}/actions/workflows/{workflow_id}/runs?{query}",
+            token,
+        )
+        for run in payload.get("workflow_runs", []):
+            created_at = str(run.get("created_at") or "")
+            try:
+                created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if created >= dispatched_after:
+                return run
+        time.sleep(max(1, poll_seconds))
+    raise TimeoutError(f"Timed out waiting for dispatched run for {repo_slug}/{workflow_label}")
+
+
+def wait_for_github_workflow_run(
+    repo_slug: str,
+    run_id: int,
+    token: str,
+    api_base_url: str,
+    timeout_seconds: int,
+    poll_seconds: int,
+) -> dict[str, Any]:
+    started = time.time()
+    while time.time() - started < timeout_seconds:
+        run = github_api_json("GET", f"{api_base_url}/repos/{repo_slug}/actions/runs/{run_id}", token)
+        if run.get("status") == "completed":
+            return run
+        time.sleep(max(1, poll_seconds))
+    raise TimeoutError(f"Timed out waiting for GitHub workflow run {run_id} in {repo_slug}")
+
+
+def workflow_result_from_github_run(
+    executor: TestExecutor,
+    outputs_dir: Path,
+    workflow_label: str,
+    run: dict[str, Any],
+    started_at: str,
+    elapsed_seconds: int,
+) -> WorkflowResult:
+    workflow = Path(workflow_label).stem
+    output_dir = outputs_dir / executor.type / executor.name / workflow
+    log_file = output_dir / "run.log"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    conclusion = str(run.get("conclusion") or "failure")
+    status = STATUS_PASSED if conclusion == "success" else STATUS_FAILED
+    html_url = str(run.get("html_url") or "")
+    details = f"GitHub Actions workflow_dispatch concluded with {conclusion}"
+    if html_url:
+        details = f"{details}; details: {html_url}"
+    log_file.write_text(
+        "\n".join(
+            [
+                f"GitHub Actions workflow: {workflow_label}",
+                f"Run id: {run.get('id', 'n/a')}",
+                f"Run URL: {html_url or 'n/a'}",
+                f"Status: {run.get('status', 'n/a')}",
+                f"Conclusion: {conclusion}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = WorkflowResult(
+        type=executor.type,
+        repository=executor.name,
+        repo_url=executor.github_url,
+        branch=executor.branch,
+        workflow=workflow_label,
+        status=status,
+        exit_code=0 if status == STATUS_PASSED else 1,
+        duration_seconds=elapsed_seconds,
+        commands=[],
+        executed_commands=[],
+        output_dir=str(output_dir),
+        log_file=str(log_file),
+        copied_result_paths=[],
+        total_tests=0,
+        failed_tests=0,
+        skipped_tests=0,
+        started_at=started_at,
+        finished_at=utc_now(),
+        details=details,
+    )
+    write_json(output_dir / "result.json", asdict(result))
+    return result
 
 
 def is_reusable_only_workflow(workflow_file: Path) -> bool:
@@ -2098,6 +2330,145 @@ def run_executor(
     return results
 
 
+def run_parallel_executor(
+    executor: TestExecutor,
+    temp_dir: Path,
+    outputs_dir: Path,
+    clean: bool,
+    github_token: str,
+    api_base_url: str,
+    poll_seconds: int,
+    timeout_seconds: int,
+    specmatic_version: str = "",
+    enterprise_version: str = "",
+    enterprise_docker_image: str = "",
+    jar_url: str = "",
+    jar_path: str = "",
+) -> list[WorkflowResult]:
+    if executor.result_profile is not None:
+        log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
+        return [profiled_result(executor, outputs_dir)]
+
+    if executor.command:
+        return [
+            synthetic_result(
+                executor,
+                outputs_dir,
+                "_configured",
+                STATUS_SETUP_FAILED,
+                "parallel mode dispatches GitHub workflow files; configured commands require sequential mode",
+                1,
+            )
+        ]
+
+    repo_slug = github_repo_slug(executor.github_url)
+    if not repo_slug:
+        return [synthetic_result(executor, outputs_dir, "_setup", STATUS_MISSING_REPO_URL, "could not determine GitHub repository", 1)]
+
+    repo_dir = temp_dir / executor.type / executor.name
+    setup_dir = outputs_dir / executor.type / executor.name / "_setup"
+    setup_log = setup_dir / "run.log"
+    setup_dir.mkdir(parents=True, exist_ok=True)
+    setup_status, setup_details, setup_exit_code = prepare_repo(executor, repo_dir, clean=clean, log_file=setup_log)
+    if setup_status != STATUS_PASSED:
+        return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
+
+    workflow_files = discover_workflow_files(repo_dir, executor)
+    workflow_files = [
+        workflow_file
+        for workflow_file in workflow_files
+        if workflow_file.name.lower() not in SKIPPED_WORKFLOW_FILE_NAMES and not is_reusable_only_workflow(workflow_file)
+    ]
+    log_progress(f"    discovered {len(workflow_files)} dispatchable workflow file{'s' if len(workflow_files) != 1 else ''}")
+    if not workflow_files:
+        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
+
+    ref = executor.branch or "main"
+    dispatched: list[tuple[str, str, datetime, str]] = []
+    dispatch_errors: list[WorkflowResult] = []
+    for workflow_file in workflow_files:
+        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+        available_inputs = extract_workflow_dispatch_inputs(workflow_file)
+        inputs = workflow_dispatch_inputs_for(
+            available_inputs=available_inputs,
+            specmatic_version=specmatic_version,
+            enterprise_version=enterprise_version,
+            enterprise_docker_image=enterprise_docker_image,
+            jar_url=jar_url,
+            jar_path=jar_path,
+        )
+        started_at = utc_now()
+        dispatched_after = datetime.now(timezone.utc)
+        log_progress(f"  -> dispatching workflow {workflow_label} in {repo_slug} on {ref}")
+        try:
+            dispatch_github_workflow(
+                repo_slug=repo_slug,
+                workflow_label=workflow_label,
+                ref=ref,
+                inputs=inputs,
+                token=github_token,
+                api_base_url=api_base_url,
+            )
+            dispatched.append((workflow_label, started_at, dispatched_after, ref))
+        except Exception as exc:
+            dispatch_errors.append(
+                synthetic_result(
+                    executor,
+                    outputs_dir,
+                    Path(workflow_label).stem,
+                    STATUS_SETUP_FAILED,
+                    f"workflow_dispatch failed for {workflow_label}: {exc}",
+                    1,
+                )
+            )
+
+    results: list[WorkflowResult] = list(dispatch_errors)
+    for workflow_label, started_at, dispatched_after, ref in dispatched:
+        started = time.time()
+        try:
+            run = find_dispatched_workflow_run(
+                repo_slug=repo_slug,
+                workflow_label=workflow_label,
+                branch=ref,
+                dispatched_after=dispatched_after,
+                token=github_token,
+                api_base_url=api_base_url,
+                timeout_seconds=timeout_seconds,
+                poll_seconds=poll_seconds,
+            )
+            log_progress(f"     waiting for {workflow_label}: {run.get('html_url', run.get('id'))}")
+            completed = wait_for_github_workflow_run(
+                repo_slug=repo_slug,
+                run_id=int(run["id"]),
+                token=github_token,
+                api_base_url=api_base_url,
+                timeout_seconds=timeout_seconds,
+                poll_seconds=poll_seconds,
+            )
+            result = workflow_result_from_github_run(
+                executor=executor,
+                outputs_dir=outputs_dir,
+                workflow_label=workflow_label,
+                run=completed,
+                started_at=started_at,
+                elapsed_seconds=int(time.time() - started),
+            )
+            log_progress(f"     result: {result.status}; output={result.output_dir}")
+            results.append(result)
+        except Exception as exc:
+            results.append(
+                synthetic_result(
+                    executor,
+                    outputs_dir,
+                    Path(workflow_label).stem,
+                    STATUS_SETUP_FAILED,
+                    f"workflow_dispatch polling failed for {workflow_label}: {exc}",
+                    1,
+                )
+            )
+    return results
+
+
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
     failed = [result for result in results if result.status != STATUS_PASSED]
     repos_where_tests_ran = sorted({result.repository for result in results if result.executed_commands})
@@ -2439,6 +2810,21 @@ def main() -> int:
 
     all_results: list[WorkflowResult] = []
     applied_overrides: dict[str, dict[str, str]] = {}
+    parallel_github_token = (
+        os.environ.get("ORCHESTRATOR_GITHUB_TOKEN")
+        or os.environ.get("SPECMATIC_GITHUB_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or ""
+    )
+    github_api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
+    if args.run_parallel and not parallel_github_token:
+        print(
+            "RUN_PARALLEL requires ORCHESTRATOR_GITHUB_TOKEN, SPECMATIC_GITHUB_TOKEN, or GITHUB_TOKEN "
+            "with permission to dispatch and read target repository workflow runs.",
+            file=sys.stderr,
+        )
+        return 1
+
     for executor in executors:
         effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
         effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
@@ -2461,21 +2847,42 @@ def main() -> int:
                 f"enterprise={effective_enterprise_version or 'n/a'}, "
                 f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
             )
-        all_results.extend(
-            run_executor(
-                executor,
-                temp_dir,
-                outputs_dir,
-                clean=args.clean,
-                cli_setup_config=cli_setup_config,
-                dry_run=args.dry_run,
-                specmatic_version=effective_specmatic_version,
-                enterprise_version=effective_enterprise_version,
-                enterprise_docker_image=effective_enterprise_docker_image,
+        if args.run_parallel:
+            log_progress("    run_parallel=true; dispatching GitHub workflows and waiting for completion")
+            all_results.extend(
+                run_parallel_executor(
+                    executor=executor,
+                    temp_dir=temp_dir,
+                    outputs_dir=outputs_dir,
+                    clean=args.clean,
+                    github_token=parallel_github_token,
+                    api_base_url=github_api_base_url,
+                    poll_seconds=args.parallel_poll_seconds,
+                    timeout_seconds=args.parallel_timeout_seconds,
+                    specmatic_version=effective_specmatic_version,
+                    enterprise_version=effective_enterprise_version,
+                    enterprise_docker_image=effective_enterprise_docker_image,
+                    jar_url=args.specmatic_jar_url,
+                    jar_path=args.specmatic_jar_path,
+                )
             )
-        )
+        else:
+            all_results.extend(
+                run_executor(
+                    executor,
+                    temp_dir,
+                    outputs_dir,
+                    clean=args.clean,
+                    cli_setup_config=cli_setup_config,
+                    dry_run=args.dry_run,
+                    specmatic_version=effective_specmatic_version,
+                    enterprise_version=effective_enterprise_version,
+                    enterprise_docker_image=effective_enterprise_docker_image,
+                )
+            )
 
     summary = build_summary(all_results)
+    summary["run_parallel"] = args.run_parallel
     summary["specmatic_version"] = args.specmatic_version
     summary["enterprise_version"] = args.enterprise_version
     summary["enterprise_docker_image"] = args.enterprise_docker_image

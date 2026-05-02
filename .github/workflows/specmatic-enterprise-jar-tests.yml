@@ -41,6 +41,11 @@ on:
         options:
           - ubuntu-latest
           - windows-latest
+      run_parallel:
+        description: Dispatch target repository workflows in parallel and wait for them
+        required: false
+        default: false
+        type: boolean
   repository_dispatch:
     types:
       - specmatic-enterprise-jar-ready
@@ -120,6 +125,7 @@ jobs:
               "ENTERPRISE_VERSION": pick("enterprise_version"),
               "ENTERPRISE_CONFIGURATION": pick("enterprise_configuration", default="ubuntu-latest"),
               "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
+              "RUN_PARALLEL": pick("run_parallel", default="false").lower(),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
               "SPECMATIC_SUMMARY_JSON": "outputs/orchestration-summary.json",
@@ -168,6 +174,7 @@ jobs:
           ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ORCHESTRATOR_RUN_ID: ${{ github.run_id }}
           ORCHESTRATOR_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ORCHESTRATOR_GITHUB_TOKEN: ${{ secrets.SPECMATIC_GITHUB_TOKEN }}
         run: |
           set +e
           mkdir -p "$SPEC_OUTPUTS_DIR" "$SPEC_CONSOLIDATED_DIR"
@@ -176,12 +183,18 @@ jobs:
           export ENTERPRISE_VERSION
           export ORCHESTRATOR_TEST_EXECUTOR_PATH
           export SPEC_OUTPUTS_DIR
+          export RUN_PARALLEL
+          extra_args=()
+          if [ "${RUN_PARALLEL}" = "true" ]; then
+            extra_args+=(--run-parallel)
+          fi
           python scripts/run-orchestration-test.py \
             --config "${ORCHESTRATOR_TEST_EXECUTOR_PATH:-}" \
             --outputs-dir "$SPEC_OUTPUTS_DIR" \
             --specmatic-jar-url "$SPECMATIC_JAR_URL" \
             --specmatic-jar-path "$SPECMATIC_JAR_PATH" \
-            --enterprise-version "$ENTERPRISE_VERSION"
+            --enterprise-version "$ENTERPRISE_VERSION" \
+            "${extra_args[@]}"
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit 0

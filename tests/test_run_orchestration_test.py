@@ -95,6 +95,52 @@ class RunOrchestrationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_orchestration_test.clean_outputs_dir(Path.cwd())
 
+    def test_github_repo_slug_extracts_owner_and_repo(self) -> None:
+        self.assertEqual(
+            run_orchestration_test.github_repo_slug("https://github.com/specmatic/specmatic-order-bff-java.git"),
+            "specmatic/specmatic-order-bff-java",
+        )
+
+    def test_workflow_dispatch_inputs_only_include_declared_inputs(self) -> None:
+        inputs = run_orchestration_test.workflow_dispatch_inputs_for(
+            available_inputs={"enterprise_version", "SPECMATIC_JAR_URL"},
+            specmatic_version="",
+            enterprise_version="1.2.3-SNAPSHOT",
+            enterprise_docker_image="specmatic/studio:test",
+            jar_url="https://example.com/specmatic.jar",
+            jar_path="/tmp/specmatic.jar",
+        )
+
+        self.assertEqual(
+            inputs,
+            {
+                "enterprise_version": "1.2.3-SNAPSHOT",
+                "SPECMATIC_JAR_URL": "https://example.com/specmatic.jar",
+            },
+        )
+
+    def test_extract_workflow_dispatch_inputs(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            workflow = temp_dir / "workflow.yml"
+            workflow.write_text(
+                """
+name: sample
+on:
+  workflow_dispatch:
+    inputs:
+      enterprise_version:
+        type: string
+      run_visual:
+        type: boolean
+""",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                run_orchestration_test.extract_workflow_dispatch_inputs(workflow),
+                {"enterprise_version", "run_visual"},
+            )
+
     def test_validate_required_enterprise_version_reports_missing_value(self) -> None:
         original_env = run_orchestration_test.os.environ.copy()
         try:
