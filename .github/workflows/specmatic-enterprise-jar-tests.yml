@@ -1,5 +1,5 @@
 name: Specmatic Enterprise Jar Tests
-run-name: Specmatic Enterprise Jar Tests (${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
+run-name: Specmatic Enterprise Jar Tests (${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
 
 on:
   workflow_dispatch:
@@ -55,8 +55,8 @@ permissions:
 
 jobs:
   run-orchestrator:
-    name: run-orchestrator (${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
-    runs-on: ${{ github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
+    name: run-orchestrator (${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
+    runs-on: ${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
     defaults:
       run:
         shell: bash
@@ -127,11 +127,12 @@ jobs:
                   return str(value)
               return pick(name, default=default)
 
-          def pick_enterprise(name: str, default: str = "") -> str:
-              value = enterprise_options.get(name)
-              if value not in (None, ""):
-                  return str(value)
-              return pick(name, default=default)
+          def pick_enterprise(*names: str, default: str = "") -> str:
+              for name in names:
+                  value = enterprise_options.get(name)
+                  if value not in (None, ""):
+                      return str(value)
+              return pick(*names, default=default)
 
           values = {
               "SPECMATIC_JAR_URL": pick_option("jar_url"),
