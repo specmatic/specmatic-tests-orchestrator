@@ -352,6 +352,8 @@ on:
 
                 self.assertEqual(exit_code, 1)
                 output = stdout.getvalue()
+                self.assertIn("Test executor manifest:", output)
+                self.assertIn(f"resolved path={config}", output)
                 self.assertIn("Enterprise artifact resolution:", output)
                 self.assertIn("requested ENTERPRISE_VERSION='SNAPSHOT'", output)
                 self.assertIn("resolved enterprise_version='1.12.1-SNAPSHOT'", output)

@@ -2758,6 +2758,11 @@ def main() -> int:
         return 1
 
     config_path = resolve_config_path(args.config)
+    log_progress(
+        "Test executor manifest: "
+        f"requested config={args.config or 'default'}, "
+        f"resolved path={config_path}"
+    )
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
