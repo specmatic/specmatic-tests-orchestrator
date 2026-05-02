@@ -117,6 +117,9 @@ jobs:
           options = payload.get("orchestrator_options")
           if not isinstance(options, dict):
               options = {}
+          enterprise_options = payload.get("enterprise_options")
+          if not isinstance(enterprise_options, dict):
+              enterprise_options = {}
 
           def pick_option(name: str, default: str = "") -> str:
               value = options.get(name)
@@ -124,17 +127,23 @@ jobs:
                   return str(value)
               return pick(name, default=default)
 
+          def pick_enterprise(name: str, default: str = "") -> str:
+              value = enterprise_options.get(name)
+              if value not in (None, ""):
+                  return str(value)
+              return pick(name, default=default)
+
           values = {
-              "SPECMATIC_JAR_URL": pick("jar_url"),
-              "ENTERPRISE_REPOSITORY": pick("enterprise_repository", default="specmatic/enterprise"),
-              "ENTERPRISE_SHA": pick("enterprise_sha"),
-              "ENTERPRISE_RUN_ID": pick("enterprise_run_id"),
-              "ENTERPRISE_RUN_ATTEMPT": pick("enterprise_run_attempt"),
-              "ENTERPRISE_STATUS_CONTEXT": pick("enterprise_status_context"),
-              "ENTERPRISE_STATUS_TARGET_URL": pick("enterprise_status_target_url"),
-              "ENTERPRISE_VERSION": pick("enterprise_version"),
-              "ENTERPRISE_CONFIGURATION": pick("enterprise_configuration", default="ubuntu-latest"),
-              "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
+              "SPECMATIC_JAR_URL": pick_option("jar_url"),
+              "ENTERPRISE_REPOSITORY": pick_enterprise("repository", "enterprise_repository", default="specmatic/enterprise"),
+              "ENTERPRISE_SHA": pick_enterprise("sha", "enterprise_sha"),
+              "ENTERPRISE_RUN_ID": pick_enterprise("run_id", "enterprise_run_id"),
+              "ENTERPRISE_RUN_ATTEMPT": pick_enterprise("run_attempt", "enterprise_run_attempt"),
+              "ENTERPRISE_STATUS_CONTEXT": pick_enterprise("status_context", "enterprise_status_context"),
+              "ENTERPRISE_STATUS_TARGET_URL": pick_enterprise("status_target_url", "enterprise_status_target_url"),
+              "ENTERPRISE_VERSION": pick_enterprise("version", "enterprise_version"),
+              "ENTERPRISE_CONFIGURATION": pick_enterprise("configuration", "enterprise_configuration", default="ubuntu-latest"),
+              "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick_option("test_executor_path"),
               "RUN_PARALLEL": pick_option("run_parallel", default="false").lower(),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
