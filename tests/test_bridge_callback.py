@@ -134,6 +134,16 @@ class BridgeCallbackTest(unittest.TestCase):
                         "total_tests": 233,
                         "failed_tests": 6,
                         "skipped_tests": 5,
+                        "error_summary": [
+                            {
+                                "repository": "sample-project/contract-tests",
+                                "workflow": ".github/workflows/gradle.yml",
+                                "status": "setup_failed",
+                                "error": ".github/workflows/gradle.yml cannot be dispatched because it does not declare workflow_dispatch.",
+                                "action": "Add workflow_dispatch to the target workflow, or list only dispatchable workflows in the parallel manifest.",
+                                "log": "outputs/sample-project/contract-tests/gradle/run.log",
+                            }
+                        ],
                         "results": [
                             {
                                 "type": "sample-project",
@@ -208,6 +218,10 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
                 self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | failed | 227 | 5 | 4 |", step_summary)
+                self.assertIn("Error summary and actionable steps:", step_summary)
+                self.assertIn("Add workflow_dispatch to the target workflow", step_summary)
+                self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", step_summary)
+                self.assertNotIn("Summary JSON excerpt", step_summary)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -247,6 +261,8 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
         self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | command_failed | 0 | 0 | 0 | 3 command(s) failed |", markdown)
+        self.assertNotIn("Summary JSON excerpt", markdown)
+        self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", markdown)
 
     def test_compact_summary_markdown_does_not_include_raw_json_excerpt(self) -> None:
         markdown = __import__("scripts.bridge_to_enterprise", fromlist=["compact_summary_markdown"]).compact_summary_markdown(

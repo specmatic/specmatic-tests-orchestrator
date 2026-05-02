@@ -124,8 +124,6 @@ def infer_conclusion(summary: dict[str, Any]) -> str:
 
 
 def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
-    raw_summary = render_json(summary)
-    excerpt = raw_summary if len(raw_summary) <= 3500 else raw_summary[:3450] + "\n... truncated for display ..."
     total_workflows = summary_count(summary, "total")
     passed_workflows = summary_count(summary, "passed_count")
     failed_workflows = summary_count(summary, "failed_count")
@@ -184,11 +182,40 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
                 + " |"
             )
 
+    error_summary = summary.get("error_summary")
+    if isinstance(error_summary, list) and error_summary:
+        body.extend(
+            [
+                "",
+                "Error summary and actionable steps:",
+                "",
+                "| Repository | Workflow | Status | Error | Action | Log |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for entry in error_summary:
+            if not isinstance(entry, dict):
+                continue
+            body.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(entry.get("repository", "n/a")).replace("|", "\\|"),
+                        str(entry.get("workflow", "n/a")).replace("|", "\\|"),
+                        str(entry.get("status", "n/a")).replace("|", "\\|"),
+                        str(entry.get("error", "n/a")).replace("|", "\\|"),
+                        str(entry.get("action", "n/a")).replace("|", "\\|"),
+                        str(entry.get("log", "n/a")).replace("|", "\\|"),
+                    ]
+                )
+                + " |"
+            )
+
     body.append("")
-    body.append("Summary JSON excerpt:")
-    body.append("```json")
-    body.append(excerpt)
-    body.append("```")
+    body.append(
+        "Full details are available in the `specmatic-outputs` workflow artifact: "
+        "`outputs/orchestration-summary.json` and `outputs/index.html`."
+    )
     return "\n".join(body)
 
 
