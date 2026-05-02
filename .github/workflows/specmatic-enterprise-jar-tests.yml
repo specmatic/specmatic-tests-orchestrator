@@ -114,6 +114,16 @@ jobs:
                       return str(value)
               return default
 
+          options = payload.get("orchestrator_options")
+          if not isinstance(options, dict):
+              options = {}
+
+          def pick_option(name: str, default: str = "") -> str:
+              value = options.get(name)
+              if value not in (None, ""):
+                  return str(value)
+              return pick(name, default=default)
+
           values = {
               "SPECMATIC_JAR_URL": pick("jar_url"),
               "ENTERPRISE_REPOSITORY": pick("enterprise_repository", default="specmatic/enterprise"),
@@ -125,7 +135,7 @@ jobs:
               "ENTERPRISE_VERSION": pick("enterprise_version"),
               "ENTERPRISE_CONFIGURATION": pick("enterprise_configuration", default="ubuntu-latest"),
               "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick("test_executor_path"),
-              "RUN_PARALLEL": pick("run_parallel", default="false").lower(),
+              "RUN_PARALLEL": pick_option("run_parallel", default="false").lower(),
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
               "SPECMATIC_SUMMARY_JSON": "outputs/orchestration-summary.json",
