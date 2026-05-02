@@ -665,6 +665,16 @@ def extract_workflow_dispatch_inputs(workflow_file: Path) -> set[str]:
     return inputs
 
 
+def has_workflow_dispatch_trigger(workflow_file: Path) -> bool:
+    for line in workflow_file.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if re.search(r"(^|[\s,\[-])workflow_dispatch\s*(:|,|\]|$)", stripped):
+            return True
+    return False
+
+
 def workflow_dispatch_inputs_for(
     available_inputs: set[str],
     specmatic_version: str,
@@ -2203,6 +2213,16 @@ def synthetic_result(
         finished_at=utc_now(),
         details=details,
     )
+    log_file.write_text(
+        "\n".join(
+            [
+                f"Status: {status}",
+                f"Details: {details}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     write_json(output_dir / "result.json", asdict(result))
     return result
 
@@ -2373,19 +2393,46 @@ def run_parallel_executor(
     if setup_status != STATUS_PASSED:
         return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
 
-    workflow_files = discover_workflow_files(repo_dir, executor)
-    workflow_files = [
+    discovered_workflow_files = discover_workflow_files(repo_dir, executor)
+    candidate_workflow_files = [
         workflow_file
-        for workflow_file in workflow_files
+        for workflow_file in discovered_workflow_files
         if workflow_file.name.lower() not in SKIPPED_WORKFLOW_FILE_NAMES and not is_reusable_only_workflow(workflow_file)
     ]
-    log_progress(f"    discovered {len(workflow_files)} dispatchable workflow file{'s' if len(workflow_files) != 1 else ''}")
-    if not workflow_files:
+    workflow_files = [workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger(workflow_file)]
+    non_dispatchable_workflow_files = [
+        workflow_file for workflow_file in candidate_workflow_files if not has_workflow_dispatch_trigger(workflow_file)
+    ]
+    log_progress(
+        f"    discovered {len(workflow_files)} dispatchable workflow file{'s' if len(workflow_files) != 1 else ''}"
+    )
+    if non_dispatchable_workflow_files:
+        log_progress(
+            "    skipped "
+            f"{len(non_dispatchable_workflow_files)} workflow file"
+            f"{'s' if len(non_dispatchable_workflow_files) != 1 else ''} without workflow_dispatch"
+        )
+    if not workflow_files and not non_dispatchable_workflow_files:
         return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
 
     ref = executor.branch or "main"
     dispatched: list[tuple[str, str, datetime, str]] = []
     dispatch_errors: list[WorkflowResult] = []
+    for workflow_file in non_dispatchable_workflow_files:
+        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+        dispatch_errors.append(
+            synthetic_result(
+                executor,
+                outputs_dir,
+                Path(workflow_label).stem,
+                STATUS_SETUP_FAILED,
+                (
+                    f"{workflow_label} cannot be dispatched because it does not declare workflow_dispatch. "
+                    "Add an on.workflow_dispatch trigger to this target workflow, or remove it from the parallel manifest."
+                ),
+                1,
+            )
+        )
     for workflow_file in workflow_files:
         workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
         available_inputs = extract_workflow_dispatch_inputs(workflow_file)
@@ -2473,6 +2520,7 @@ def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
     failed = [result for result in results if result.status != STATUS_PASSED]
     repos_where_tests_ran = sorted({result.repository for result in results if result.executed_commands})
     repos_where_tests_did_not_run = sorted({result.repository for result in results if not result.executed_commands})
+    error_summary = build_error_summary(failed)
 
     return {
         "conclusion": "success" if not failed else "failure",
@@ -2485,8 +2533,75 @@ def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
         "total_tests": sum(result.total_tests for result in results),
         "failed_tests": sum(result.failed_tests for result in results),
         "skipped_tests": sum(result.skipped_tests for result in results),
+        "error_summary": error_summary,
         "results": [asdict(result) for result in results],
     }
+
+
+def actionable_step_for_result(result: WorkflowResult) -> str:
+    details = result.details.lower()
+    if "does not declare workflow_dispatch" in details:
+        return (
+            "Add workflow_dispatch to the target workflow, or list only dispatchable workflows in the parallel manifest. "
+            "If this workflow should run only through local command extraction, run with run_parallel=false."
+        )
+    if "workflow_dispatch failed" in details and ("404" in details or "not found" in details):
+        return (
+            "Confirm the workflow file exists on the target branch and declares workflow_dispatch. "
+            "Also confirm the token can access the target repository."
+        )
+    if "workflow_dispatch failed" in details and ("422" in details or "workflow does not have" in details):
+        return (
+            "Check the target workflow's workflow_dispatch inputs and required values. "
+            "The orchestrator only sends inputs declared by that workflow."
+        )
+    if "timed out waiting for dispatched run" in details:
+        return (
+            "Confirm the dispatch created a run in the target repo Actions tab, the target branch is correct, "
+            "and the token has actions read access."
+        )
+    if result.status == STATUS_SETUP_FAILED:
+        return "Open the linked run.log for the setup error, then fix the target workflow/repository setup before re-running."
+    if result.status == STATUS_COMMAND_FAILED:
+        return "Open run.log for the failing command and fix the command, dependency, or environment reported there."
+    if result.failed_tests:
+        return "Open the copied test reports or run.log, fix the failing tests, then re-run the orchestrator."
+    return "Open run.log for details and re-run after fixing the reported failure."
+
+
+def build_error_summary(failed_results: list[WorkflowResult]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for result in failed_results:
+        entries.append(
+            {
+                "repository": f"{result.type}/{result.repository}",
+                "workflow": result.workflow,
+                "status": result.status,
+                "error": result.details,
+                "action": actionable_step_for_result(result),
+                "log": result.log_file,
+            }
+        )
+    return entries
+
+
+def render_error_summary(error_summary: list[dict[str, str]], limit: int = 20) -> str:
+    if not error_summary:
+        return ""
+    lines = ["Error Summary and Actionable Steps"]
+    for index, entry in enumerate(error_summary[:limit], start=1):
+        lines.extend(
+            [
+                f"{index}. {entry['repository']} / {Path(entry['workflow']).stem} [{entry['status']}]",
+                f"   Error: {entry['error']}",
+                f"   Action: {entry['action']}",
+                f"   Log: {entry['log']}",
+            ]
+        )
+    remaining = len(error_summary) - limit
+    if remaining > 0:
+        lines.append(f"... {remaining} more failure(s). See outputs/orchestration-summary.json for the full list.")
+    return "\n".join(lines)
 
 
 def render_summary_table(results: list[WorkflowResult]) -> str:
@@ -2907,6 +3022,10 @@ def main() -> int:
         f"workflows {summary['passed_count']}/{summary['total']} passed | "
         f"tests {summary['total_tests']} total, {summary['failed_tests']} failed, {summary['skipped_tests']} skipped"
     )
+    rendered_error_summary = render_error_summary(summary.get("error_summary", []))
+    if rendered_error_summary:
+        log_progress("")
+        log_progress(rendered_error_summary)
     if args.specmatic_version or args.enterprise_version or args.enterprise_docker_image:
         log_progress(
             "Version overrides: "

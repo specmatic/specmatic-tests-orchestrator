@@ -141,6 +141,65 @@ on:
                 {"enterprise_version", "run_visual"},
             )
 
+    def test_has_workflow_dispatch_trigger(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            dispatchable = temp_dir / "dispatchable.yml"
+            dispatchable.write_text(
+                """
+name: sample
+on:
+  workflow_dispatch:
+  push:
+""",
+                encoding="utf-8",
+            )
+            push_only = temp_dir / "push-only.yml"
+            push_only.write_text(
+                """
+name: sample
+on:
+  push:
+""",
+                encoding="utf-8",
+            )
+            inline = temp_dir / "inline.yml"
+            inline.write_text("name: sample\non: [push, workflow_dispatch]\n", encoding="utf-8")
+
+            self.assertTrue(run_orchestration_test.has_workflow_dispatch_trigger(dispatchable))
+            self.assertTrue(run_orchestration_test.has_workflow_dispatch_trigger(inline))
+            self.assertFalse(run_orchestration_test.has_workflow_dispatch_trigger(push_only))
+
+    def test_error_summary_includes_actionable_steps_for_non_dispatchable_workflow(self) -> None:
+        result = run_orchestration_test.WorkflowResult(
+            type="sample-project",
+            repository="contract-tests",
+            repo_url="https://github.com/specmatic/specmatic-order-bff-java.git",
+            branch="main",
+            workflow=".github/workflows/gradle.yml",
+            status=run_orchestration_test.STATUS_SETUP_FAILED,
+            exit_code=1,
+            duration_seconds=0,
+            commands=[],
+            executed_commands=[],
+            output_dir="outputs/sample-project/contract-tests/gradle",
+            log_file="outputs/sample-project/contract-tests/gradle/run.log",
+            copied_result_paths=[],
+            total_tests=0,
+            failed_tests=0,
+            skipped_tests=0,
+            started_at="2026-04-22T05:00:00+00:00",
+            finished_at="2026-04-22T05:00:00+00:00",
+            details=".github/workflows/gradle.yml cannot be dispatched because it does not declare workflow_dispatch.",
+        )
+
+        summary = run_orchestration_test.build_summary([result])
+
+        self.assertEqual(summary["error_summary"][0]["repository"], "sample-project/contract-tests")
+        self.assertIn("Add workflow_dispatch", summary["error_summary"][0]["action"])
+        rendered = run_orchestration_test.render_error_summary(summary["error_summary"])
+        self.assertIn("Error Summary and Actionable Steps", rendered)
+        self.assertIn("Action: Add workflow_dispatch", rendered)
+
     def test_validate_required_enterprise_version_reports_missing_value(self) -> None:
         original_env = run_orchestration_test.os.environ.copy()
         try:
