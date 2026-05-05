@@ -46,6 +46,7 @@ STATUS_MISSING_REPO_URL = "missing_repo_url"
 STATUS_NO_WORKFLOWS = "no_workflows"
 STATUS_NO_COMMANDS = "no_test_commands"
 STATUS_SETUP_FAILED = "setup_failed"
+STATUS_SKIPPED = "skipped"
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
 SKIPPED_WORKFLOW_FILE_NAMES = {"copilot-setup-steps.yml","playwright-enterprise-release-gate.yml"}
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -1322,6 +1323,15 @@ def is_playwright_executor(executor: TestExecutor) -> bool:
     return "playwright" in executor.type.lower() or "playwright" in executor.name.lower()
 
 
+def is_windows_enterprise_configuration() -> bool:
+    configuration = os.environ.get("ENTERPRISE_CONFIGURATION", "").strip().lower()
+    return configuration.startswith("windows")
+
+
+def should_skip_playwright_executor(executor: TestExecutor) -> bool:
+    return is_playwright_executor(executor) and is_windows_enterprise_configuration()
+
+
 def is_sample_project_executor(executor: TestExecutor) -> bool:
     return executor.type.lower() == "sample-project"
 
@@ -2292,6 +2302,14 @@ def run_executor(
     enterprise_version: str = "",
     enterprise_docker_image: str = "",
 ) -> list[WorkflowResult]:
+    if should_skip_playwright_executor(executor):
+        details = (
+            "skipped Playwright executor on windows enterprise configuration; "
+            "Playwright workflows are dispatched by the ubuntu enterprise configuration run"
+        )
+        log_progress(f"    {details}")
+        return [synthetic_result(executor, outputs_dir, "_skipped", STATUS_SKIPPED, details, 0)]
+
     if executor.result_profile is not None:
         log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
         return [profiled_result(executor, outputs_dir)]
@@ -2366,6 +2384,14 @@ def run_parallel_executor(
     jar_url: str = "",
     jar_path: str = "",
 ) -> list[WorkflowResult]:
+    if should_skip_playwright_executor(executor):
+        details = (
+            "skipped Playwright executor on windows enterprise configuration; "
+            "Playwright workflows are dispatched by the ubuntu enterprise configuration run"
+        )
+        log_progress(f"    {details}")
+        return [synthetic_result(executor, outputs_dir, "_skipped", STATUS_SKIPPED, details, 0)]
+
     if executor.result_profile is not None:
         log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
         return [profiled_result(executor, outputs_dir)]
@@ -2518,7 +2544,8 @@ def run_parallel_executor(
 
 
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
-    failed = [result for result in results if result.status != STATUS_PASSED]
+    successful_statuses = {STATUS_PASSED, STATUS_SKIPPED}
+    failed = [result for result in results if result.status not in successful_statuses]
     repos_where_tests_ran = sorted({result.repository for result in results if result.executed_commands})
     repos_where_tests_did_not_run = sorted({result.repository for result in results if not result.executed_commands})
     error_summary = build_error_summary(failed)
@@ -2634,6 +2661,8 @@ def render_summary_table(results: list[WorkflowResult]) -> str:
 
 
 def status_symbol(status: str) -> str:
+    if status == STATUS_SKIPPED:
+        return "SKIP"
     return "✅" if status in {STATUS_PASSED, "PASSED"} else "❌"
 
 
@@ -2829,12 +2858,13 @@ def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[W
     rows = []
     for result in sorted_results:
         page_path = Path(result.output_dir) / "index.html"
+        badge_class = "passed" if result.status in {STATUS_PASSED, STATUS_SKIPPED} else "failed"
         rows.append(
             f"""
             <tr>
               <td><a href="{html_escape(relative_href(outputs_dir / "index.html", page_path))}">{html_escape(result.type + "/" + result.repository)}</a></td>
               <td>{html_escape(Path(result.workflow).stem)}</td>
-              <td><span class="badge {"passed" if result.status == STATUS_PASSED else "failed"}">{status_symbol(result.status)}</span></td>
+              <td><span class="badge {badge_class}">{status_symbol(result.status)}</span></td>
               <td>{html_escape(result.duration_seconds)}s</td>
               <td>{html_escape(result.failed_tests)}</td>
               <td>{html_escape(result.total_tests)}</td>

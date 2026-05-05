@@ -200,6 +200,36 @@ on:
         self.assertIn("Error Summary and Actionable Steps", rendered)
         self.assertIn("Action: Add workflow_dispatch", rendered)
 
+    def test_build_summary_treats_skipped_results_as_successful(self) -> None:
+        result = run_orchestration_test.WorkflowResult(
+            type="playwright-tests",
+            repository="ui-tests",
+            repo_url="https://example.com/repo.git",
+            branch="main",
+            workflow="_skipped",
+            status=run_orchestration_test.STATUS_SKIPPED,
+            exit_code=0,
+            duration_seconds=0,
+            commands=[],
+            executed_commands=[],
+            output_dir="outputs/playwright-tests/ui-tests/_skipped",
+            log_file="outputs/playwright-tests/ui-tests/_skipped/run.log",
+            copied_result_paths=[],
+            total_tests=0,
+            failed_tests=0,
+            skipped_tests=0,
+            started_at="2026-04-22T05:00:00+00:00",
+            finished_at="2026-04-22T05:00:00+00:00",
+            details="skipped Playwright executor on windows enterprise configuration",
+        )
+
+        summary = run_orchestration_test.build_summary([result])
+
+        self.assertEqual(summary["conclusion"], "success")
+        self.assertEqual(summary["failed_count"], 0)
+        self.assertEqual(summary["passed_count"], 1)
+        self.assertEqual(summary["error_summary"], [])
+
     def test_validate_required_enterprise_version_reports_missing_value(self) -> None:
         original_env = run_orchestration_test.os.environ.copy()
         try:
@@ -838,6 +868,41 @@ jobs: {}
                 )
             )
         )
+
+    def test_skips_playwright_executor_on_windows_enterprise_configuration(self) -> None:
+        executor = run_orchestration_test.TestExecutor(
+            type="playwright-tests",
+            github_url="https://example.com/repo.git",
+            name="ui-tests",
+            branch="main",
+            description="",
+            workflow_globs=[],
+            workflow_files=[],
+            command=[],
+            result_paths=[],
+        )
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ["ENTERPRISE_CONFIGURATION"] = "windows-latest"
+            with workspace_temp_dir() as temp_dir:
+                results = run_orchestration_test.run_parallel_executor(
+                    executor=executor,
+                    temp_dir=temp_dir / "temp",
+                    outputs_dir=temp_dir / "outputs",
+                    clean=False,
+                    github_token="token",
+                    api_base_url="https://api.github.com",
+                    poll_seconds=1,
+                    timeout_seconds=1,
+                )
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, run_orchestration_test.STATUS_SKIPPED)
+        self.assertEqual(results[0].exit_code, 0)
+        self.assertIn("skipped Playwright executor on windows", results[0].details)
 
     def test_build_command_env_disables_visual_when_applitools_key_missing(self) -> None:
         with workspace_temp_dir() as temp_dir:
