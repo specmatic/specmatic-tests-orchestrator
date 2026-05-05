@@ -692,6 +692,7 @@ def workflow_dispatch_inputs_for(
         "ENTERPRISE_DOCKER_IMAGE": enterprise_docker_image,
         "specmatic_jar_url": jar_url,
         "SPECMATIC_JAR_URL": jar_url,
+        "enterprise_artifact_url": jar_url,
         "specmatic_jar_path": jar_path,
         "SPECMATIC_JAR_PATH": jar_path,
     }
