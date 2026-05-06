@@ -2539,6 +2539,13 @@ def run_parallel_executor(
         started_at = utc_now()
         dispatched_after = datetime.now(timezone.utc)
         log_progress(f"  -> dispatching workflow {workflow_label} in {repo_slug} on {ref}")
+        if inputs:
+            log_progress(
+                "     dispatch inputs: "
+                + ", ".join(f"{key}={value}" for key, value in sorted(inputs.items()))
+            )
+        else:
+            log_progress("     dispatch inputs: none")
         try:
             dispatch_github_workflow(
                 repo_slug=repo_slug,
