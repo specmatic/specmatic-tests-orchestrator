@@ -64,9 +64,6 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       APPLITOOLS_API_KEY: ${{ secrets.APPLITOOLS_API_KEY }}
       SPECMATIC_LICENSE_KEY: ${{ secrets.SPECMATIC_LICENSE_KEY }}
-
-      ORCHESTRATOR_DISABLE_VISUAL: "false"
-      ENABLE_VISUAL: "true"
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v5
@@ -85,7 +82,6 @@ jobs:
       - name: Debug Applitools
         run: |
           echo "Applitools key present ${APPLITOOLS_API_KEY:+YES}"
-          echo "ENABLE_VISUAL=$ENABLE_VISUAL"
           echo "ORCHESTRATOR_DISABLE_VISUAL=$ORCHESTRATOR_DISABLE_VISUAL"
 
       - name: Normalize workflow inputs
