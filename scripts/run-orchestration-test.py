@@ -718,6 +718,7 @@ def workflow_dispatch_inputs_for(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_disable_visual: str = "",
 ) -> dict[str, str]:
     candidates = {
         "specmatic_version": specmatic_version,
@@ -733,6 +734,8 @@ def workflow_dispatch_inputs_for(
         "jar_url": jar_url,
         "specmatic_jar_path": jar_path,
         "SPECMATIC_JAR_PATH": jar_path,
+        "orchestrator_disable_visual": orchestrator_disable_visual,
+        "ORCHESTRATOR_DISABLE_VISUAL": orchestrator_disable_visual,
     }
     return {
         key: value
@@ -2519,6 +2522,11 @@ def run_parallel_executor(
     for workflow_file in workflow_files:
         workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
         available_inputs = extract_workflow_dispatch_inputs(workflow_file)
+        additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
+        orchestrator_disable_visual = additional_env_map.get(
+            "ORCHESTRATOR_DISABLE_VISUAL",
+            os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true"),
+        )
         inputs = workflow_dispatch_inputs_for(
             available_inputs=available_inputs,
             specmatic_version=specmatic_version,
@@ -2526,6 +2534,7 @@ def run_parallel_executor(
             enterprise_docker_image=enterprise_docker_image,
             jar_url=jar_url,
             jar_path=jar_path,
+            orchestrator_disable_visual=orchestrator_disable_visual,
         )
         started_at = utc_now()
         dispatched_after = datetime.now(timezone.utc)
