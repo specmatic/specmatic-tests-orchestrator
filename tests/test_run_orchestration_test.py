@@ -103,7 +103,7 @@ class RunOrchestrationTest(unittest.TestCase):
 
     def test_workflow_dispatch_inputs_only_include_declared_inputs(self) -> None:
         inputs = run_orchestration_test.workflow_dispatch_inputs_for(
-            available_inputs={"enterprise_version", "SPECMATIC_JAR_URL"},
+            available_inputs={"enterprise_version", "SPECMATIC_JAR_URL", "enterprise_artifact_url", "enterprise_jar_url", "jar_url"},
             specmatic_version="",
             enterprise_version="1.2.3-SNAPSHOT",
             enterprise_docker_image="specmatic/studio:test",
@@ -116,6 +116,9 @@ class RunOrchestrationTest(unittest.TestCase):
             {
                 "enterprise_version": "1.2.3-SNAPSHOT",
                 "SPECMATIC_JAR_URL": "https://example.com/specmatic.jar",
+                "enterprise_artifact_url": "https://example.com/specmatic.jar",
+                "enterprise_jar_url": "https://example.com/specmatic.jar",
+                "jar_url": "https://example.com/specmatic.jar",
             },
         )
 

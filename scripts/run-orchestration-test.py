@@ -108,6 +108,7 @@ class TestExecutor:
     specmatic_version: str = ""
     enterprise_version: str = ""
     enterprise_docker_image: str = ""
+    additional_env_variables: list[str] | None = None
     result_profile: dict[str, Any] | None = None
 
 
@@ -447,6 +448,32 @@ def normalize_command_list(raw_command: Any) -> list[str]:
     return []
 
 
+def normalize_additional_env_list(raw_env: Any) -> list[str]:
+    if isinstance(raw_env, list):
+        return [str(item).strip() for item in raw_env if str(item).strip()]
+    return []
+
+
+def validate_additional_env_variables(entries: list[str], executor_name: str) -> None:
+    invalid_entries: list[str] = []
+    for entry in entries:
+        raw = entry.strip()
+        if not raw or "=" not in raw:
+            invalid_entries.append(raw)
+            continue
+        key, _ = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            invalid_entries.append(raw)
+
+    if invalid_entries:
+        formatted = ", ".join(repr(item) for item in invalid_entries)
+        raise ValueError(
+            f"Invalid additional-env-variables for executor '{executor_name}'. "
+            f"Each entry must be in KEY=VALUE format. Invalid entries: {formatted}"
+        )
+
+
 def expand_env_placeholders(value: str) -> str:
     if not value:
         return value
@@ -464,6 +491,13 @@ def normalize_executor(raw: dict[str, Any], index: int) -> TestExecutor:
     enterprise_docker_image = expand_env_placeholders(
         str(raw.get("enterprise-docker-image") or raw.get("enterpriseDockerImage") or "")
     )
+    additional_env_variables = normalize_additional_env_list(
+        raw.get("additional-env-variables")
+        or raw.get("additionalEnvVariables")
+        or raw.get("additional_env_variables")
+        or []
+    )
+    validate_additional_env_variables(additional_env_variables, repo_name)
 
     return TestExecutor(
         type=str(raw.get("type") or "default"),
@@ -478,6 +512,7 @@ def normalize_executor(raw: dict[str, Any], index: int) -> TestExecutor:
         specmatic_version=specmatic_version,
         enterprise_version=enterprise_version,
         enterprise_docker_image=enterprise_docker_image,
+        additional_env_variables=additional_env_variables,
         result_profile=raw.get("result") if isinstance(raw.get("result"), dict) else None,
     )
 
@@ -694,6 +729,8 @@ def workflow_dispatch_inputs_for(
         "specmatic_jar_url": jar_url,
         "SPECMATIC_JAR_URL": jar_url,
         "enterprise_artifact_url": jar_url,
+        "enterprise_jar_url": jar_url,
+        "jar_url": jar_url,
         "specmatic_jar_path": jar_path,
         "SPECMATIC_JAR_PATH": jar_path,
     }
@@ -1607,6 +1644,21 @@ def apply_gradle_version_overrides(
     return overridden
 
 
+def parse_additional_env_variables(entries: list[str] | None) -> dict[str, str]:
+    env_map: dict[str, str] = {}
+    for entry in entries or []:
+        raw = entry.strip()
+        if not raw or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        env_map[key] = value
+    return env_map
+
+
 def build_command_env(
     repo_dir: Path,
     output_dir: Path,
@@ -1637,15 +1689,19 @@ def build_command_env(
     if enterprise_docker_image:
         env["ENTERPRISE_DOCKER_IMAGE"] = enterprise_docker_image
         env["SPECMATIC_STUDIO_DOCKER_IMAGE"] = enterprise_docker_image
+
+    additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
+    if additional_env_map:
+        log_progress("    Additional parameters passed:")
+        for key in sorted(additional_env_map.keys()):
+            value = additional_env_map[key]
+            env[key] = value
+            log_progress(f"      - {key}={value}")
+    else:
+        log_progress("    No Additional parameters passed.")
+
     if is_playwright_executor(executor):
         env["SPECMATIC_TEST_ORCHESTRATOR"] = "true"
-        enable_visual = os.environ.get("ENABLE_VISUAL", "").strip().lower()
-        if enable_visual:
-            env["ENABLE_VISUAL"] = "true" if enable_visual in {"1","true","yes","on"} else "false"
-        else:
-            disable_visual = os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true").strip().lower()
-            env["ENABLE_VISUAL"] = "false" if disable_visual in {"1","true","yes","on"} else "true"
-            
         env["SPECMATIC_STUDIO_JAR_URL"] = ""
         env["SPECMATIC_JAR_URL"] = ""
         env["SPECMATIC_JAR_PATH"] = ""
