@@ -812,10 +812,27 @@ def wait_for_github_workflow_run(
     api_base_url: str,
     timeout_seconds: int,
     poll_seconds: int,
+    workflow_label: str = "",
 ) -> dict[str, Any]:
     started = time.time()
+    last_status: str | None = None
+    last_conclusion: str | None = None
+    poll_count = 0
     while time.time() - started < timeout_seconds:
         run = github_api_json("GET", f"{api_base_url}/repos/{repo_slug}/actions/runs/{run_id}", token)
+        poll_count += 1
+        status = str(run.get("status") or "unknown")
+        conclusion = str(run.get("conclusion") or "")
+        if status != last_status or conclusion != last_conclusion or poll_count % 5 == 0:
+            elapsed = int(time.time() - started)
+            label = workflow_label or str(run_id)
+            summary = f"     polling {label}: status={status}"
+            if conclusion:
+                summary += f", conclusion={conclusion}"
+            summary += f", elapsed={elapsed}s"
+            log_progress(summary)
+            last_status = status
+            last_conclusion = conclusion
         if run.get("status") == "completed":
             return run
         time.sleep(max(1, poll_seconds))
@@ -2590,6 +2607,7 @@ def run_parallel_executor(
                 api_base_url=api_base_url,
                 timeout_seconds=timeout_seconds,
                 poll_seconds=poll_seconds,
+                workflow_label=workflow_label,
             )
             result = workflow_result_from_github_run(
                 executor=executor,
