@@ -736,6 +736,8 @@ def workflow_dispatch_inputs_for(
         "SPECMATIC_JAR_PATH": jar_path,
         "orchestrator_disable_visual": orchestrator_disable_visual,
         "ORCHESTRATOR_DISABLE_VISUAL": orchestrator_disable_visual,
+        "orchestrator_run_number": os.environ.get("GITHUB_RUN_NUMBER", ""),
+        "ORCHESTRATOR_RUN_NUMBER": os.environ.get("GITHUB_RUN_NUMBER", ""),
     }
     return {
         key: value
@@ -2552,6 +2554,7 @@ def run_parallel_executor(
             jar_url=jar_url,
             jar_path=jar_path,
             orchestrator_disable_visual=orchestrator_disable_visual,
+            
         )
         started_at = utc_now()
         dispatched_after = datetime.now(timezone.utc)
