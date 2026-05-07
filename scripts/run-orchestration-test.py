@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import fnmatch
 import json
 import os
 import re
@@ -190,6 +192,13 @@ class ParallelWorkflowRun:
     conclusion: str = ""
     completed_run: dict[str, Any] | None = None
     error_message: str = ""
+
+
+@dataclass(frozen=True)
+class RemoteWorkflowFile:
+    label: str
+    name: str
+    text: str
 
 
 def parse_env_line(line: str) -> tuple[str, str] | None:
@@ -651,6 +660,85 @@ def discover_workflow_files(repo_dir: Path, executor: TestExecutor) -> list[Path
     return sorted(dict.fromkeys(path.resolve() for path in workflow_files if path.is_file()))
 
 
+def normalize_workflow_label(label: str) -> str:
+    normalized = label.strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def remote_workflow_matches_executor(path: str, executor: TestExecutor) -> bool:
+    normalized_path = normalize_workflow_label(path)
+    if executor.workflow_files:
+        configured = {normalize_workflow_label(workflow_file) for workflow_file in executor.workflow_files}
+        return normalized_path in configured
+    return any(fnmatch.fnmatch(normalized_path, normalize_workflow_label(pattern)) for pattern in executor.workflow_globs)
+
+
+def decode_github_content_file(item: dict[str, Any]) -> str:
+    content = str(item.get("content") or "")
+    encoding = str(item.get("encoding") or "")
+    if encoding == "base64":
+        return base64.b64decode(content).decode("utf-8")
+    return content
+
+
+def discover_remote_workflow_files(
+    repo_slug: str,
+    ref: str,
+    executor: TestExecutor,
+    token: str,
+    api_base_url: str,
+) -> list[RemoteWorkflowFile]:
+    if executor.workflow_files:
+        workflow_items: list[dict[str, Any]] = []
+        for workflow_file in executor.workflow_files:
+            workflow_label = normalize_workflow_label(workflow_file)
+            encoded_path = urllib.parse.quote(workflow_label, safe="/")
+            query = urllib.parse.urlencode({"ref": ref})
+            item = github_api_json(
+                "GET",
+                f"{api_base_url}/repos/{repo_slug}/contents/{encoded_path}?{query}",
+                token,
+            )
+            if str(item.get("type") or "") == "file":
+                workflow_items.append(item)
+    else:
+        query = urllib.parse.urlencode({"ref": ref})
+        listing = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{repo_slug}/contents/.github/workflows?{query}",
+            token,
+        )
+        if not isinstance(listing, list):
+            raise RuntimeError(f"Expected .github/workflows listing for {repo_slug} to be a JSON array")
+        workflow_items = [
+            item
+            for item in listing
+            if isinstance(item, dict)
+            and str(item.get("type") or "") == "file"
+            and remote_workflow_matches_executor(str(item.get("path") or ""), executor)
+        ]
+
+    files: list[RemoteWorkflowFile] = []
+    for item in workflow_items:
+        path = normalize_workflow_label(str(item.get("path") or item.get("name") or ""))
+        if not path:
+            continue
+        if "/" not in path:
+            path = normalize_workflow_label(f".github/workflows/{path}")
+        if "content" not in item:
+            query = urllib.parse.urlencode({"ref": ref})
+            encoded_path = urllib.parse.quote(path, safe="/")
+            item = github_api_json(
+                "GET",
+                f"{api_base_url}/repos/{repo_slug}/contents/{encoded_path}?{query}",
+                token,
+            )
+        files.append(RemoteWorkflowFile(label=path, name=Path(path).name, text=decode_github_content_file(item)))
+    return sorted(files, key=lambda item: item.label)
+
+
 def github_repo_slug(repo_url: str) -> str:
     parsed = urllib.parse.urlsplit(repo_url)
     path = parsed.path if parsed.scheme else repo_url
@@ -689,8 +777,8 @@ def github_api_json(
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
 
 
-def extract_workflow_dispatch_inputs(workflow_file: Path) -> set[str]:
-    lines = workflow_file.read_text(encoding="utf-8").splitlines()
+def extract_workflow_dispatch_inputs_from_text(text: str) -> set[str]:
+    lines = text.splitlines()
     inputs: set[str] = set()
     in_dispatch = False
     in_inputs = False
@@ -719,14 +807,22 @@ def extract_workflow_dispatch_inputs(workflow_file: Path) -> set[str]:
     return inputs
 
 
-def has_workflow_dispatch_trigger(workflow_file: Path) -> bool:
-    for line in workflow_file.read_text(encoding="utf-8").splitlines():
+def extract_workflow_dispatch_inputs(workflow_file: Path) -> set[str]:
+    return extract_workflow_dispatch_inputs_from_text(workflow_file.read_text(encoding="utf-8"))
+
+
+def has_workflow_dispatch_trigger_in_text(text: str) -> bool:
+    for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         if re.search(r"(^|[\s,\[-])workflow_dispatch\s*(:|,|\]|$)", stripped):
             return True
     return False
+
+
+def has_workflow_dispatch_trigger(workflow_file: Path) -> bool:
+    return has_workflow_dispatch_trigger_in_text(workflow_file.read_text(encoding="utf-8"))
 
 
 def workflow_dispatch_inputs_for(
@@ -2613,23 +2709,38 @@ def run_parallel_executor(
     if not repo_slug:
         return [synthetic_result(executor, outputs_dir, "_setup", STATUS_MISSING_REPO_URL, "could not determine GitHub repository", 1)]
 
-    repo_dir = temp_dir / executor.type / executor.name
-    setup_dir = outputs_dir / executor.type / executor.name / "_setup"
-    setup_log = setup_dir / "run.log"
-    setup_dir.mkdir(parents=True, exist_ok=True)
-    setup_status, setup_details, setup_exit_code = prepare_repo(executor, repo_dir, clean=clean, log_file=setup_log)
-    if setup_status != STATUS_PASSED:
-        return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
+    ref = executor.branch or "main"
+    log_progress(f"    discovering workflows via GitHub API in {repo_slug} on {ref}")
+    try:
+        discovered_workflow_files = discover_remote_workflow_files(
+            repo_slug=repo_slug,
+            ref=ref,
+            executor=executor,
+            token=github_token,
+            api_base_url=api_base_url,
+        )
+    except Exception as exc:
+        return [
+            synthetic_result(
+                executor,
+                outputs_dir,
+                "_discovery",
+                STATUS_SETUP_FAILED,
+                f"could not discover GitHub workflows via API for {repo_slug}: {exc}",
+                1,
+            )
+        ]
 
-    discovered_workflow_files = discover_workflow_files(repo_dir, executor)
     candidate_workflow_files = [
         workflow_file
         for workflow_file in discovered_workflow_files
-        if workflow_file.name.lower() not in SKIPPED_WORKFLOW_FILE_NAMES and not is_reusable_only_workflow(workflow_file)
+        if workflow_file.name.lower() not in SKIPPED_WORKFLOW_FILE_NAMES
     ]
-    workflow_files = [workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger(workflow_file)]
+    workflow_files = [
+        workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger_in_text(workflow_file.text)
+    ]
     non_dispatchable_workflow_files = [
-        workflow_file for workflow_file in candidate_workflow_files if not has_workflow_dispatch_trigger(workflow_file)
+        workflow_file for workflow_file in candidate_workflow_files if not has_workflow_dispatch_trigger_in_text(workflow_file.text)
     ]
     log_progress(
         f"    discovered {len(workflow_files)} dispatchable workflow file"
@@ -2644,11 +2755,10 @@ def run_parallel_executor(
     if not workflow_files and not non_dispatchable_workflow_files:
         return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
 
-    ref = executor.branch or "main"
     dispatched: list[ParallelWorkflowRun] = []
     dispatch_errors: list[WorkflowResult] = []
     for workflow_file in non_dispatchable_workflow_files:
-        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+        workflow_label = workflow_file.label
         dispatch_errors.append(
             synthetic_result(
                 executor,
@@ -2665,8 +2775,8 @@ def run_parallel_executor(
     if workflow_files:
         log_progress(f"    preparing workflow_dispatch requests for {len(workflow_files)} workflow(s)")
     for index, workflow_file in enumerate(workflow_files, start=1):
-        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
-        available_inputs = extract_workflow_dispatch_inputs(workflow_file)
+        workflow_label = workflow_file.label
+        available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
         additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
         orchestrator_disable_visual = additional_env_map.get(
             "ORCHESTRATOR_DISABLE_VISUAL",

@@ -86,6 +86,75 @@ flowchart LR
 - [`tests/test_orchestrate_invalid_jar_end_to_end.py`](./tests/test_orchestrate_invalid_jar_end_to_end.py) verifies invalid jar handling before tests start.
 - [`tests/resources/`](./tests/resources) contains success and failure manifest fixtures for test scenarios.
 
+## Sequential vs Parallel Execution
+
+The current Enterprise test runner is [`scripts/run-orchestration-test.py`](./scripts/run-orchestration-test.py). It supports two execution modes from the same test-executor manifest.
+
+- Sequential mode is used when `RUN_PARALLEL=false` or `--run-parallel` is not supplied.
+- Parallel mode is used when `RUN_PARALLEL=true` or `--run-parallel` is supplied.
+
+### Sequential Mode
+
+Sequential mode clones each configured repository locally into `temp/`, discovers the configured GitHub workflow files from the checkout, extracts runnable shell commands, runs those commands in the local runner, copies reports into `outputs/`, and then writes one consolidated summary.
+
+```mermaid
+flowchart TD
+  A["run-orchestration-test.py<br/>RUN_PARALLEL=false"] --> B["Load test-executor.json"]
+  B --> C["For each configured repo"]
+  C --> D["Clone repo into temp/&lt;type&gt;/&lt;name&gt;"]
+  D --> E["Read .github/workflows/*.yml locally"]
+  E --> F["Extract runnable test/build commands"]
+  F --> G["Prepare Enterprise jar/version overrides"]
+  G --> H["Run commands locally in cloned repo"]
+  H --> I["Copy JUnit / CTRF / HTML reports"]
+  I --> J["Write outputs/&lt;repo&gt;/&lt;workflow&gt;"]
+  J --> K["Build outputs/orchestration-summary.json<br/>and outputs/index.html"]
+  K --> L["bridge_to_enterprise.py updates the caller gate"]
+```
+
+Use sequential mode when target workflows do not have `workflow_dispatch`, or when the orchestrator must run commands locally exactly as extracted from the target workflow YAML.
+
+### Parallel Mode
+
+Parallel mode does not clone target repositories for workflow discovery. Instead, it reads each target repo's `.github/workflows` directory through the GitHub Contents API, filters workflows based on the manifest, keeps only workflows that declare `workflow_dispatch`, dispatches all of them, waits for the resulting GitHub Actions runs, and then writes the consolidated summary.
+
+```mermaid
+flowchart TD
+  A["run-orchestration-test.py<br/>RUN_PARALLEL=true"] --> B["Load test-executor.json"]
+  B --> C["For each configured repo"]
+  C --> D["Read .github/workflows via GitHub Contents API"]
+  D --> E["Apply workflow-files / workflow-globs filters"]
+  E --> F{"workflow_dispatch declared?"}
+  F -->|No| G["Record setup_failed<br/>with actionable fix"]
+  F -->|Yes| H["Extract declared workflow_dispatch inputs"]
+  H --> I["Dispatch target workflow via GitHub Actions API"]
+  I --> J["Poll all dispatched runs"]
+  J --> K["Convert run conclusions into workflow results"]
+  G --> L["Build outputs/orchestration-summary.json<br/>and outputs/index.html"]
+  K --> L
+  L --> M["bridge_to_enterprise.py updates the caller gate"]
+```
+
+Parallel mode requires the token passed as `ORCHESTRATOR_GITHUB_TOKEN`, `SPECMATIC_GITHUB_TOKEN`, or `GITHUB_TOKEN` to be able to read workflow files, dispatch target workflows, and read workflow runs in each target repository.
+
+Target workflows must include `workflow_dispatch`. For example:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      enterprise_version:
+        required: false
+        type: string
+      enterprise_artifact_url:
+        required: false
+        type: string
+  push:
+    branches: [main]
+```
+
+If a workflow does not declare `workflow_dispatch`, parallel mode will not try to clone or run it locally. It will report `setup_failed` with an actionable step telling you to either add `workflow_dispatch`, narrow the manifest, or run sequentially.
+
 ## How Enterprise triggers this workflow
 
 The recommended approach from `specmatic/enterprise` is to send a `repository_dispatch` event to this repository after the jar is built and uploaded.
