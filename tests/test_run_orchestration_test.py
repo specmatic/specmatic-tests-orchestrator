@@ -102,23 +102,37 @@ class RunOrchestrationTest(unittest.TestCase):
         )
 
     def test_workflow_dispatch_inputs_only_include_declared_inputs(self) -> None:
-        inputs = run_orchestration_test.workflow_dispatch_inputs_for(
-            available_inputs={"enterprise_version", "SPECMATIC_JAR_URL", "enterprise_artifact_url", "enterprise_jar_url", "jar_url"},
-            specmatic_version="",
-            enterprise_version="1.2.3-SNAPSHOT",
-            enterprise_docker_image="specmatic/studio:test",
-            jar_url="https://example.com/specmatic.jar",
-            jar_path="/tmp/specmatic.jar",
-        )
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ["GITHUB_RUN_NUMBER"] = "150"
+            inputs = run_orchestration_test.workflow_dispatch_inputs_for(
+                available_inputs={
+                    "enterprise_version",
+                    "specmatic_jar_url",
+                    "enterprise_artifact_url",
+                    "enterprise_jar_url",
+                    "jar_url",
+                    "orchestrator_run_suffix",
+                },
+                specmatic_version="",
+                enterprise_version="1.2.3-SNAPSHOT",
+                enterprise_docker_image="specmatic/studio:test",
+                jar_url="https://example.com/specmatic.jar",
+                jar_path="/tmp/specmatic.jar",
+            )
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
 
         self.assertEqual(
             inputs,
             {
                 "enterprise_version": "1.2.3-SNAPSHOT",
-                "SPECMATIC_JAR_URL": "https://example.com/specmatic.jar",
+                "specmatic_jar_url": "https://example.com/specmatic.jar",
                 "enterprise_artifact_url": "https://example.com/specmatic.jar",
                 "enterprise_jar_url": "https://example.com/specmatic.jar",
                 "jar_url": "https://example.com/specmatic.jar",
+                "orchestrator_run_suffix": "Orchestrator #150",
             },
         )
 
@@ -1640,6 +1654,29 @@ jobs:
         self.assertTrue(table.startswith("\n"))
         self.assertTrue(table.endswith("\n"))
         self.assertIn("\n==================================================", table)
+
+    def test_matches_dispatched_workflow_run_from_orchestrator_title_when_timestamp_skews(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+        run = {
+            "display_title": "Studio OpenAPI Generate Dictionary - Orchestrator #150",
+            "created_at": "2026-05-07T09:59:40Z",
+        }
+
+        matched = run_orchestration_test.workflow_run_matches_dispatch(
+            run,
+            dispatched_after,
+            expected_run_title_fragment="Orchestrator #150",
+        )
+
+        self.assertTrue(matched)
 
     def test_run_parallel_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:

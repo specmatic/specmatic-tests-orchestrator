@@ -48,6 +48,7 @@ STATUS_NO_COMMANDS = "no_test_commands"
 STATUS_SETUP_FAILED = "setup_failed"
 STATUS_SKIPPED = "skipped"
 PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
+WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
 SKIPPED_WORKFLOW_FILE_NAMES = {"copilot-setup-steps.yml","playwright-enterprise-release-gate.yml"}
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -182,6 +183,7 @@ class ParallelWorkflowRun:
     dispatched_after: datetime
     ref: str
     dispatch_started_monotonic: float
+    expected_run_title_fragment: str = ""
     run_id: int | None = None
     html_url: str = ""
     github_status: str = "pending"
@@ -736,24 +738,19 @@ def workflow_dispatch_inputs_for(
     jar_path: str,
     orchestrator_disable_visual: str = "",
 ) -> dict[str, str]:
+    github_run_number = os.environ.get("GITHUB_RUN_NUMBER", "")
+    orchestrator_run_suffix = f"Orchestrator #{github_run_number}" if github_run_number else ""
     candidates = {
         "specmatic_version": specmatic_version,
-        "SPECMATIC_VERSION": specmatic_version,
         "enterprise_version": enterprise_version,
-        "ENTERPRISE_VERSION": enterprise_version,
         "enterprise_docker_image": enterprise_docker_image,
-        "ENTERPRISE_DOCKER_IMAGE": enterprise_docker_image,
         "specmatic_jar_url": jar_url,
-        "SPECMATIC_JAR_URL": jar_url,
         "enterprise_artifact_url": jar_url,
         "enterprise_jar_url": jar_url,
         "jar_url": jar_url,
         "specmatic_jar_path": jar_path,
-        "SPECMATIC_JAR_PATH": jar_path,
         "orchestrator_disable_visual": orchestrator_disable_visual,
-        "ORCHESTRATOR_DISABLE_VISUAL": orchestrator_disable_visual,
-        "orchestrator_run_number": os.environ.get("GITHUB_RUN_NUMBER", ""),
-        "ORCHESTRATOR_RUN_NUMBER": os.environ.get("GITHUB_RUN_NUMBER", ""),
+        "orchestrator_run_suffix": orchestrator_run_suffix,
     }
     return {
         key: value
@@ -795,6 +792,7 @@ def find_dispatched_workflow_run(
     api_base_url: str,
     timeout_seconds: int,
     poll_seconds: int,
+    expected_run_title_fragment: str = "",
 ) -> dict[str, Any]:
     started = time.time()
     while time.time() - started < timeout_seconds:
@@ -805,6 +803,7 @@ def find_dispatched_workflow_run(
             dispatched_after=dispatched_after,
             token=token,
             api_base_url=api_base_url,
+            expected_run_title_fragment=expected_run_title_fragment,
         )
         if run is not None:
             return run
@@ -819,6 +818,7 @@ def find_dispatched_workflow_run_once(
     dispatched_after: datetime,
     token: str,
     api_base_url: str,
+    expected_run_title_fragment: str = "",
 ) -> dict[str, Any] | None:
     workflow_id = workflow_id_for_api(workflow_label)
     query = urllib.parse.urlencode(
@@ -834,14 +834,34 @@ def find_dispatched_workflow_run_once(
         token,
     )
     for run in payload.get("workflow_runs", []):
+        if workflow_run_matches_dispatch(run, dispatched_after, expected_run_title_fragment):
+            return run
+    return None
+
+
+def workflow_run_matches_dispatch(
+    run: dict[str, Any],
+    dispatched_after: datetime,
+    expected_run_title_fragment: str = "",
+) -> bool:
+    if expected_run_title_fragment:
+        display_title = str(run.get("display_title") or run.get("name") or "")
+        if expected_run_title_fragment.lower() in display_title.lower():
+            return True
+
         created_at = str(run.get("created_at") or "")
         try:
             created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         except ValueError:
-            continue
-        if created >= dispatched_after:
-            return run
-    return None
+            return False
+        return created >= dispatched_after
+
+    created_at = str(run.get("created_at") or "")
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return created.timestamp() >= dispatched_after.timestamp() - WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS
 
 
 def wait_for_github_workflow_run(
@@ -2683,6 +2703,7 @@ def run_parallel_executor(
                 token=github_token,
                 api_base_url=api_base_url,
             )
+            orchestrator_run_suffix = inputs.get("orchestrator_run_suffix") or ""
             dispatched.append(
                 ParallelWorkflowRun(
                     workflow_label=workflow_label,
@@ -2690,6 +2711,7 @@ def run_parallel_executor(
                     dispatched_after=dispatched_after,
                     ref=ref,
                     dispatch_started_monotonic=time.time(),
+                    expected_run_title_fragment=orchestrator_run_suffix,
                 )
             )
         except Exception as exc:
@@ -2741,6 +2763,7 @@ def run_parallel_executor(
                             dispatched_after=item.dispatched_after,
                             token=github_token,
                             api_base_url=api_base_url,
+                            expected_run_title_fragment=item.expected_run_title_fragment,
                         )
                         if run is None:
                             continue
