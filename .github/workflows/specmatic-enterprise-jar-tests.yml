@@ -58,28 +58,9 @@ permissions:
   contents: read
 
 jobs:
-  validate-orchestrator:
-    if: github.event_name == 'push'
-    name: validate orchestrator workflow
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout orchestrator
-        uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.9"
-
-      - name: Validate workflow contract
-        run: |
-          set -euo pipefail
-          python -B -m unittest tests.test_enterprise_workflow_contract
-
   run-orchestrator:
-    if: github.event_name != 'push'
-    name: run-orchestrator (${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
-    runs-on: ${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
+    name: run-orchestrator (${{ github.event_name == 'push' && 'self-validation' || github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
+    runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
     defaults:
       run:
         shell: bash
@@ -98,18 +79,27 @@ jobs:
         with:
           python-version: "3.9"
 
+      - name: Validate workflow contract
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          python -B -m unittest tests.test_enterprise_workflow_contract
+
       - name: Set up Specmatic License key
+        if: github.event_name != 'push'
         run: |
           echo "Write specmatic license key to file"
           mkdir -p ~/.specmatic
           echo "${{ secrets.SPECMATIC_LICENSE_KEY }}" > ~/.specmatic/specmatic-license.txt
 
       - name: Debug Applitools
+        if: github.event_name != 'push'
         run: |
           echo "Applitools key present ${APPLITOOLS_API_KEY:+YES}"
           echo "ORCHESTRATOR_DISABLE_VISUAL=$ORCHESTRATOR_DISABLE_VISUAL"
 
       - name: Normalize workflow inputs
+        if: github.event_name != 'push'
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -179,6 +169,7 @@ jobs:
           PY
 
       - name: Validate required inputs
+        if: github.event_name != 'push'
         run: |
           set -euo pipefail
           : "${ENTERPRISE_REPOSITORY:?ENTERPRISE_REPOSITORY is required}"
@@ -194,7 +185,7 @@ jobs:
           echo "Running orchestrated tests on ${ENTERPRISE_CONFIGURATION}"
 
       - name: Download the Enterprise jar
-        if: env.SPECMATIC_JAR_URL != ''
+        if: github.event_name != 'push' && env.SPECMATIC_JAR_URL != ''
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/specmatic"
@@ -202,6 +193,7 @@ jobs:
           echo "SPECMATIC_JAR_PATH=$RUNNER_TEMP/specmatic/enterprise.jar" >> "$GITHUB_ENV"
 
       - name: Install Python dependencies
+        if: github.event_name != 'push'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -210,6 +202,7 @@ jobs:
           fi
 
       - name: Run Specmatic tests
+        if: github.event_name != 'push'
         id: specmatic-tests
         env:
           ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -241,7 +234,7 @@ jobs:
           exit 0
 
       - name: Send callback to Enterprise
-        if: always()
+        if: always() && github.event_name != 'push'
         env:
           ENTERPRISE_CALLBACK_TOKEN: ${{ secrets.SPECMATIC_GITHUB_TOKEN }}
           ORCHESTRATOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -252,19 +245,19 @@ jobs:
           python scripts/bridge_to_enterprise.py
 
       - name: Fail workflow if tests failed
-        if: always()
+        if: always() && github.event_name != 'push'
         run: |
           test "${{ steps.specmatic-tests.outputs.exit_code }}" = "0"
 
       - name: Verify summary files
-        if: always()
+        if: always() && github.event_name != 'push'
         run: |
           set -euo pipefail
           test -f "$SPECMATIC_SUMMARY_JSON"
           test -f "$SPECMATIC_SUMMARY_HTML"
 
       - name: Archive outputs
-        if: always()
+        if: always() && github.event_name != 'push'
         uses: actions/upload-artifact@v7
         with:
           name: specmatic-outputs
