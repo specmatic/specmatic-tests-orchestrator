@@ -1,5 +1,5 @@
 name: Specmatic Enterprise Jar Tests
-run-name: Specmatic Enterprise Jar Tests (${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
+run-name: ${{ github.event.client_payload.orchestrator_options.orchestrator_tester_run_number && format('Specmatic Enterprise Jar Tests - Orchestrator-tester {0} ({1})', github.event.client_payload.orchestrator_options.orchestrator_tester_run_number, github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest') || format('Specmatic Enterprise Jar Tests ({0})', github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest') }}
 
 on:
   workflow_dispatch:
@@ -46,6 +46,10 @@ on:
         required: false
         default: false
         type: boolean
+      orchestrator_tester_run_number:
+        description: Optional upstream orchestrator tester run number
+        required: false
+        type: string
   repository_dispatch:
     types:
       - specmatic-enterprise-jar-ready
