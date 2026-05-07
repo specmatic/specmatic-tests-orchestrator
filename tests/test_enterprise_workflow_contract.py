@@ -21,9 +21,10 @@ class EnterpriseWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn("name: Specmatic Tests Orchestrator", text)
         self.assertIn("github.event_name == 'repository_dispatch'", text)
-        self.assertIn("Specmatic Tests Orchestrator - {0} {1} #{2}", text)
+        self.assertIn("Specmatic Tests Orchestrator - {0} {1} {2}", text)
         self.assertIn("github.event.client_payload.enterprise_options.repository_name", text)
         self.assertIn("github.event.client_payload.enterprise_options.run_number", text)
+        self.assertIn("format('#{0}'", text)
         self.assertIn("github.event_name == 'push' && github.event.head_commit.message", text)
         self.assertIn(f"runs-on: ${{{{ {expected_runner_expression} }}}}", text)
 
