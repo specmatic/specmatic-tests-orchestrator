@@ -1625,7 +1625,7 @@ def cleanup_playwright_containers(log_file: Path, phase: str) -> None:
 
 
 def should_cleanup_shared_containers(executor: TestExecutor) -> bool:
-    return is_sample_project_executor(executor)
+    return is_sample_project_executor(executor) or is_playwright_executor(executor)
 
 
 def is_playwright_jar_mode(cli_setup_config: CliSetupConfig) -> bool:
@@ -1943,6 +1943,8 @@ def build_command_env(
 
     if is_playwright_executor(executor):
         env["SPECMATIC_TEST_ORCHESTRATOR"] = "true"
+        if not env.get("APPLITOOLS_API_KEY"):
+            env["ENABLE_VISUAL"] = "false"
         env["SPECMATIC_STUDIO_JAR_URL"] = ""
         env["SPECMATIC_JAR_URL"] = ""
         env["SPECMATIC_JAR_PATH"] = ""
@@ -2377,6 +2379,9 @@ def run_workflow_command_set(
     log_progress(f"  -> workflow {workflow_label} ({len(commands)} runnable command{'s' if len(commands) != 1 else ''})")
     playwright_runtime_started = False
     playwright_jar_mode = is_playwright_jar_mode(cli_setup_config)
+    manage_shared_containers = should_cleanup_shared_containers(executor)
+    if manage_shared_containers:
+        cleanup_playwright_containers(log_file, "before")
     if is_playwright_executor(executor):
         log_progress("     starting playwright support services for workflow")
         runtime_ok, runtime_details = start_playwright_support_runtime(
@@ -2412,12 +2417,11 @@ def run_workflow_command_set(
                 details=runtime_details,
             )
             write_json(output_dir / "result.json", asdict(result))
+            if manage_shared_containers:
+                cleanup_playwright_containers(log_file, "after")
             return result
         playwright_runtime_started = True
         log_progress(f"     {runtime_details}")
-    manage_shared_containers = should_cleanup_shared_containers(executor)
-    if manage_shared_containers:
-        cleanup_playwright_containers(log_file, "before")
 
     status = STATUS_NO_COMMANDS
     details = "no runnable test commands found"
@@ -3103,13 +3107,16 @@ def report_path_priority(path: Path) -> int:
 def report_scope(path: Path, marker: str) -> str:
     lower_parts = [part.lower() for part in path.parts]
     try:
-        specmatic_index = lower_parts.index("specmatic")
-    except ValueError:
-        return "root"
-    try:
         marker_index = lower_parts.index(marker)
     except ValueError:
         return "root"
+    specmatic_indexes = [
+        index for index, part in enumerate(lower_parts[:marker_index])
+        if part == "specmatic"
+    ]
+    if not specmatic_indexes:
+        return "root"
+    specmatic_index = specmatic_indexes[-1]
     if marker_index <= specmatic_index:
         return "root"
     scope_parts = path.parts[specmatic_index + 1 : marker_index]

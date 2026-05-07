@@ -990,7 +990,7 @@ jobs: {}
 
             self.assertEqual(env.get("ENABLE_VISUAL"), "false")
 
-    def test_build_command_env_includes_version_and_jar_overrides(self) -> None:
+    def test_build_command_env_includes_enterprise_and_jar_overrides(self) -> None:
         with workspace_temp_dir() as temp_dir:
             executor = run_orchestration_test.TestExecutor(
                 type="sample-project",
@@ -1014,7 +1014,7 @@ jobs: {}
                 specmatic_jar_url="https://example.com/specmatic.jar",
                 specmatic_jar_path="C:/tmp/specmatic.jar",
             )
-            self.assertEqual(env.get("ORG_GRADLE_PROJECT_specmaticVersion"), "2.0.0-SNAPSHOT")
+            self.assertNotIn("ORG_GRADLE_PROJECT_specmaticVersion", env)
             self.assertEqual(env.get("ORG_GRADLE_PROJECT_specmaticEnterpriseVersion"), "3.0.0-SNAPSHOT")
             self.assertEqual(env.get("ORG_GRADLE_PROJECT_enterpriseVersion"), "3.0.0-SNAPSHOT")
             self.assertEqual(env.get("SPECMATIC_JAR_URL"), "https://example.com/specmatic.jar")
