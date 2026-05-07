@@ -1639,6 +1639,7 @@ jobs:
         self.assertIn("completed (success)", table)
         self.assertTrue(table.startswith("\n"))
         self.assertTrue(table.endswith("\n"))
+        self.assertIn("\n==================================================", table)
 
     def test_run_parallel_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
@@ -1740,7 +1741,7 @@ jobs:
         self.assertIn("discovered 2 dispatchable workflow files", combined_logs)
         self.assertIn("Dispatched successfully: 2/2 workflows", combined_logs)
         self.assertIn("Parallel workflow progress - Polling attempt 1", combined_logs)
-        self.assertIn("\n\nParallel workflow progress - Polling attempt 1", combined_logs)
+        self.assertIn("==================================================", combined_logs)
         self.assertIn("alpha", combined_logs)
         self.assertIn("beta", combined_logs)
 

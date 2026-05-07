@@ -929,13 +929,16 @@ def render_parallel_progress_table(items: list[ParallelWorkflowRun], polling_att
         return " | ".join(value.ljust(widths[index]) for index, value in enumerate(values))
 
     separator = "-+-".join("-" * width for width in widths)
+    block_separator = "=" * len(separator)
     return "\n".join(
         [
             "",
+            block_separator,
             f"Parallel workflow progress - Polling attempt {polling_attempt}",
             render_row(headers),
             separator,
             *(render_row(row) for row in rows),
+            block_separator,
             "",
         ]
     )
@@ -2712,9 +2715,8 @@ def run_parallel_executor(
 
         last_progress_log_time = 0.0
         logged_initial_progress = False
-        polling_attempt = 0
+        rendered_progress_snapshot_count = 0
         while True:
-            polling_attempt += 1
             now = time.time()
             all_finished = True
             for item in dispatched:
@@ -2769,7 +2771,8 @@ def run_parallel_executor(
                 or all_finished
             )
             if should_log_progress:
-                log_progress(render_parallel_progress_table(dispatched, polling_attempt))
+                rendered_progress_snapshot_count += 1
+                log_progress(render_parallel_progress_table(dispatched, rendered_progress_snapshot_count))
                 last_progress_log_time = now
                 logged_initial_progress = True
 
