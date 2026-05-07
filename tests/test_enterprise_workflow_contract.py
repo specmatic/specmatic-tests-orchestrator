@@ -14,13 +14,18 @@ class EnterpriseWorkflowContractTest(unittest.TestCase):
     def test_repository_dispatch_uses_nested_enterprise_configuration_for_runner(self) -> None:
         text = self.workflow_text()
 
-        expected_expression = (
+        expected_runner_expression = (
             "github.event.client_payload.enterprise_options.configuration || "
             "github.event.client_payload.enterprise_configuration || "
             "inputs.enterprise_configuration || 'ubuntu-latest'"
         )
-        self.assertIn(f"run-name: Specmatic Enterprise Jar Tests (${{{{ {expected_expression} }}}})", text)
-        self.assertIn(f"runs-on: ${{{{ {expected_expression} }}}}", text)
+        self.assertIn("name: Specmatic Tests Orchestrator", text)
+        self.assertIn("github.event_name == 'repository_dispatch'", text)
+        self.assertIn("Specmatic Tests Orchestrator - {0} {1} #{2}", text)
+        self.assertIn("github.event.client_payload.enterprise_options.repository_name", text)
+        self.assertIn("github.event.client_payload.enterprise_options.run_number", text)
+        self.assertIn("github.event_name == 'push' && github.event.head_commit.message", text)
+        self.assertIn(f"runs-on: ${{{{ {expected_runner_expression} }}}}", text)
 
     def test_repository_dispatch_accepts_grouped_payload_options(self) -> None:
         text = self.workflow_text()
