@@ -908,7 +908,7 @@ def parallel_workflow_detail(item: ParallelWorkflowRun) -> str:
     return item.github_status or "pending"
 
 
-def render_parallel_progress_table(items: list[ParallelWorkflowRun]) -> str:
+def render_parallel_progress_table(items: list[ParallelWorkflowRun], polling_attempt: int) -> str:
     headers = ["Workflow", "Status", "Elapsed", "Details"]
     rows: list[list[str]] = []
     for item in sorted(items, key=lambda current: current.workflow_label.lower()):
@@ -931,10 +931,12 @@ def render_parallel_progress_table(items: list[ParallelWorkflowRun]) -> str:
     separator = "-+-".join("-" * width for width in widths)
     return "\n".join(
         [
-            "    Parallel workflow progress",
+            "",
+            f"Parallel workflow progress - Polling attempt {polling_attempt}",
             render_row(headers),
             separator,
             *(render_row(row) for row in rows),
+            "",
         ]
     )
 
@@ -2710,7 +2712,9 @@ def run_parallel_executor(
 
         last_progress_log_time = 0.0
         logged_initial_progress = False
+        polling_attempt = 0
         while True:
+            polling_attempt += 1
             now = time.time()
             all_finished = True
             for item in dispatched:
@@ -2765,7 +2769,7 @@ def run_parallel_executor(
                 or all_finished
             )
             if should_log_progress:
-                log_progress(render_parallel_progress_table(dispatched))
+                log_progress(render_parallel_progress_table(dispatched, polling_attempt))
                 last_progress_log_time = now
                 logged_initial_progress = True
 

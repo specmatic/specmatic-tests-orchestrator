@@ -1629,14 +1629,16 @@ jobs:
         )
 
         with mock.patch.object(run_orchestration_test.time, "time", return_value=125.0):
-            table = run_orchestration_test.render_parallel_progress_table([pending, success])
+            table = run_orchestration_test.render_parallel_progress_table([pending, success], polling_attempt=3)
 
-        self.assertIn("Parallel workflow progress", table)
+        self.assertIn("Parallel workflow progress - Polling attempt 3", table)
         self.assertIn("playwright-async-mock", table)
         self.assertIn("pending", table)
         self.assertIn("success", table)
         self.assertIn("1m 20s", table)
         self.assertIn("completed (success)", table)
+        self.assertTrue(table.startswith("\n"))
+        self.assertTrue(table.endswith("\n"))
 
     def test_run_parallel_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
@@ -1737,7 +1739,8 @@ jobs:
         combined_logs = "\n".join(logs)
         self.assertIn("discovered 2 dispatchable workflow files", combined_logs)
         self.assertIn("Dispatched successfully: 2/2 workflows", combined_logs)
-        self.assertIn("Parallel workflow progress", combined_logs)
+        self.assertIn("Parallel workflow progress - Polling attempt 1", combined_logs)
+        self.assertIn("\n\nParallel workflow progress - Polling attempt 1", combined_logs)
         self.assertIn("alpha", combined_logs)
         self.assertIn("beta", combined_logs)
 
