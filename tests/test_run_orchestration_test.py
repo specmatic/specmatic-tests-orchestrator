@@ -1606,6 +1606,141 @@ jobs:
         self.assertIn("8", table)
         self.assertIn("2", table)
 
+    def test_renders_parallel_progress_table_with_compact_statuses(self) -> None:
+        pending = run_orchestration_test.ParallelWorkflowRun(
+            workflow_label=".github/workflows/playwright-async-mock.yml",
+            started_at="2026-04-22T05:00:00+00:00",
+            dispatched_after=run_orchestration_test.datetime.now(run_orchestration_test.timezone.utc),
+            ref="main",
+            dispatch_started_monotonic=45.0,
+            run_id=101,
+            github_status="in_progress",
+        )
+        success = run_orchestration_test.ParallelWorkflowRun(
+            workflow_label=".github/workflows/playwright-openapi-spec.yml",
+            started_at="2026-04-22T05:00:00+00:00",
+            dispatched_after=run_orchestration_test.datetime.now(run_orchestration_test.timezone.utc),
+            ref="main",
+            dispatch_started_monotonic=5.0,
+            run_id=102,
+            github_status="completed",
+            conclusion="success",
+            completed_run={"id": 102, "status": "completed", "conclusion": "success"},
+        )
+
+        with mock.patch.object(run_orchestration_test.time, "time", return_value=125.0):
+            table = run_orchestration_test.render_parallel_progress_table([pending, success])
+
+        self.assertIn("Parallel workflow progress", table)
+        self.assertIn("playwright-async-mock", table)
+        self.assertIn("pending", table)
+        self.assertIn("success", table)
+        self.assertIn("1m 20s", table)
+        self.assertIn("completed (success)", table)
+
+    def test_run_parallel_executor_logs_dispatch_summary_and_progress_table(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            repo_dir = temp_dir / "temp" / "playwright-tests" / "repo"
+            workflow_dir = repo_dir / ".github" / "workflows"
+            workflow_dir.mkdir(parents=True, exist_ok=True)
+            alpha = workflow_dir / "alpha.yml"
+            beta = workflow_dir / "beta.yml"
+            alpha.write_text("name: alpha\n", encoding="utf-8")
+            beta.write_text("name: beta\n", encoding="utf-8")
+
+            executor = run_orchestration_test.TestExecutor(
+                type="playwright-tests",
+                github_url="https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
+                name="repo",
+                branch="main",
+                description="",
+                workflow_globs=[],
+                workflow_files=[],
+                command=[],
+                result_paths=[],
+            )
+
+            logs: list[str] = []
+            tick = {"value": 0.0}
+
+            def fake_time() -> float:
+                tick["value"] += 15.0
+                return tick["value"]
+
+            def fake_prepare_repo(*args, **kwargs):
+                return run_orchestration_test.STATUS_PASSED, "ok", 0
+
+            def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+                if "/actions/workflows/alpha.yml/runs" in url:
+                    return {
+                        "workflow_runs": [
+                            {
+                                "id": 101,
+                                "status": "queued",
+                                "conclusion": None,
+                                "html_url": "https://example.com/101",
+                                "created_at": "2026-12-22T05:00:05Z",
+                            }
+                        ]
+                    }
+                if "/actions/workflows/beta.yml/runs" in url:
+                    return {
+                        "workflow_runs": [
+                            {
+                                "id": 102,
+                                "status": "queued",
+                                "conclusion": None,
+                                "html_url": "https://example.com/102",
+                                "created_at": "2026-12-22T05:00:05Z",
+                            }
+                        ]
+                    }
+                if "/actions/runs/101" in url:
+                    return {
+                        "id": 101,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "html_url": "https://example.com/101",
+                    }
+                if "/actions/runs/102" in url:
+                    return {
+                        "id": 102,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://example.com/102",
+                    }
+                raise AssertionError(f"Unexpected GitHub API url: {url}")
+
+            with mock.patch.object(run_orchestration_test, "prepare_repo", side_effect=fake_prepare_repo), \
+                mock.patch.object(run_orchestration_test, "discover_workflow_files", return_value=[alpha, beta]), \
+                mock.patch.object(run_orchestration_test, "has_workflow_dispatch_trigger", return_value=True), \
+                mock.patch.object(run_orchestration_test, "extract_workflow_dispatch_inputs", return_value=set()), \
+                mock.patch.object(run_orchestration_test, "dispatch_github_workflow", return_value=None), \
+                mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
+                mock.patch.object(run_orchestration_test, "log_progress", side_effect=logs.append), \
+                mock.patch.object(run_orchestration_test.time, "time", side_effect=fake_time), \
+                mock.patch.object(run_orchestration_test.time, "sleep", return_value=None):
+                results = run_orchestration_test.run_parallel_executor(
+                    executor=executor,
+                    temp_dir=temp_dir / "temp",
+                    outputs_dir=temp_dir / "outputs",
+                    clean=False,
+                    github_token="token",
+                    api_base_url="https://api.github.com",
+                    poll_seconds=1,
+                    timeout_seconds=1000,
+                )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].status, run_orchestration_test.STATUS_PASSED)
+        self.assertEqual(results[1].status, run_orchestration_test.STATUS_FAILED)
+        combined_logs = "\n".join(logs)
+        self.assertIn("discovered 2 dispatchable workflow files", combined_logs)
+        self.assertIn("Dispatched successfully: 2/2 workflows", combined_logs)
+        self.assertIn("Parallel workflow progress", combined_logs)
+        self.assertIn("alpha", combined_logs)
+        self.assertIn("beta", combined_logs)
+
     def test_renders_consolidated_dashboard_and_workflow_page(self) -> None:
         with workspace_temp_dir() as temp_dir:
             output_dir = temp_dir / "outputs"
