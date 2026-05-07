@@ -26,6 +26,12 @@ class EnterpriseWorkflowContractTest(unittest.TestCase):
         self.assertIn("github.event.client_payload.enterprise_options.run_number", text)
         self.assertIn("format('#{0}'", text)
         self.assertIn("github.event_name == 'push' && github.event.head_commit.message", text)
+        self.assertIn("push:", text)
+        self.assertIn("branches:", text)
+        self.assertIn("validate-orchestrator:", text)
+        self.assertIn("if: github.event_name == 'push'", text)
+        self.assertIn("python -B -m unittest tests.test_enterprise_workflow_contract", text)
+        self.assertIn("if: github.event_name != 'push'", text)
         self.assertIn(f"runs-on: ${{{{ {expected_runner_expression} }}}}", text)
 
     def test_repository_dispatch_accepts_grouped_payload_options(self) -> None:

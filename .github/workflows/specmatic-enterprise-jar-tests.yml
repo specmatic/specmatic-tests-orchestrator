@@ -3,6 +3,9 @@ run-name: >-
   ${{ github.event_name == 'repository_dispatch' && format('Specmatic Tests Orchestrator - {0} {1} {2}', github.event.client_payload.enterprise_options.repository_name || github.event.client_payload.enterprise_options.repository || 'unknown-repo', github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || 'ubuntu-latest', github.event.client_payload.enterprise_options.run_number && format('#{0}', github.event.client_payload.enterprise_options.run_number) || github.event.client_payload.orchestrator_options.orchestrator_tester_run_number && format('#{0}', github.event.client_payload.orchestrator_options.orchestrator_tester_run_number) || github.event.client_payload.orchestrator_options.run_number && format('#{0}', github.event.client_payload.orchestrator_options.run_number) || github.event.client_payload.enterprise_options.run_id && format('#{0}', github.event.client_payload.enterprise_options.run_id) || '#unknown') || github.event_name == 'push' && github.event.head_commit.message || 'Specmatic Tests Orchestrator' }}
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       jar_url:
@@ -55,7 +58,26 @@ permissions:
   contents: read
 
 jobs:
+  validate-orchestrator:
+    if: github.event_name == 'push'
+    name: validate orchestrator workflow
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout orchestrator
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate workflow contract
+        run: |
+          set -euo pipefail
+          python -B -m unittest tests.test_enterprise_workflow_contract
+
   run-orchestrator:
+    if: github.event_name != 'push'
     name: run-orchestrator (${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }})
     runs-on: ${{ github.event.client_payload.enterprise_options.configuration || github.event.client_payload.enterprise_configuration || inputs.enterprise_configuration || 'ubuntu-latest' }}
     defaults:
