@@ -622,6 +622,12 @@ def run_command(command: list[str], cwd: Path | None, env: dict[str, str] | None
             return 127
 
 
+def append_log(log_file: Path, message: str) -> None:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a", encoding="utf-8") as log:
+        log.write(f"{message}\n")
+
+
 def prepare_repo(executor: TestExecutor, repo_dir: Path, clean: bool, log_file: Path) -> tuple[str, str, int]:
     if not executor.github_url:
         return STATUS_MISSING_REPO_URL, "github-url is required", 1
@@ -775,6 +781,81 @@ def github_api_json(
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def github_api_bytes(method: str, url: str, token: str, ok_statuses: set[int] | None = None) -> bytes:
+    request = urllib.request.Request(url, method=method)
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    expected = ok_statuses or {200}
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = response.read()
+            if response.status not in expected:
+                raise RuntimeError(f"GitHub API returned HTTP {response.status}: {body.decode('utf-8', errors='replace')}")
+            return body
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def safe_artifact_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip())
+    return cleaned.strip(".-") or "artifact"
+
+
+def download_github_run_artifacts(
+    repo_slug: str,
+    run_id: int,
+    output_dir: Path,
+    token: str,
+    api_base_url: str,
+    log_file: Path,
+) -> list[Path]:
+    try:
+        payload = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{repo_slug}/actions/runs/{run_id}/artifacts?per_page=100",
+            token,
+        )
+    except Exception as exc:
+        append_log(log_file, f"Could not list workflow artifacts: {exc}")
+        return []
+
+    artifacts = payload.get("artifacts", [])
+    if not isinstance(artifacts, list) or not artifacts:
+        append_log(log_file, "No workflow artifacts found.")
+        return []
+
+    artifact_root = output_dir / "artifacts"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    extracted_paths: list[Path] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or artifact.get("expired"):
+            continue
+        artifact_id = artifact.get("id")
+        if artifact_id in (None, ""):
+            continue
+        artifact_name = safe_artifact_name(str(artifact.get("name") or artifact_id))
+        archive_url = str(artifact.get("archive_download_url") or "")
+        if not archive_url:
+            archive_url = f"{api_base_url}/repos/{repo_slug}/actions/artifacts/{artifact_id}/zip"
+
+        archive_path = artifact_root / f"{artifact_name}.zip"
+        extract_dir = artifact_root / artifact_name
+        try:
+            archive_bytes = github_api_bytes("GET", archive_url, token)
+            archive_path.write_bytes(archive_bytes)
+            remove_tree(extract_dir)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(archive_path) as archive:
+                archive.extractall(extract_dir)
+            extracted_paths.append(extract_dir)
+            append_log(log_file, f"Downloaded artifact {artifact_name} to {extract_dir}")
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            append_log(log_file, f"Could not download artifact {artifact_name}: {exc}")
+    return extracted_paths
 
 
 def extract_workflow_dispatch_inputs_from_text(text: str) -> set[str]:
@@ -1063,10 +1144,13 @@ def render_parallel_progress_table(items: list[ParallelWorkflowRun], polling_att
 def workflow_result_from_github_run(
     executor: TestExecutor,
     outputs_dir: Path,
+    repo_slug: str,
     workflow_label: str,
     run: dict[str, Any],
     started_at: str,
     elapsed_seconds: int,
+    github_token: str,
+    api_base_url: str,
 ) -> WorkflowResult:
     workflow = Path(workflow_label).stem
     output_dir = outputs_dir / executor.type / executor.name / workflow
@@ -1091,6 +1175,30 @@ def workflow_result_from_github_run(
         ),
         encoding="utf-8",
     )
+    artifact_paths: list[Path] = []
+    total_tests = 0
+    failed_tests = 0
+    skipped_tests = 0
+    run_id = run.get("id")
+    if run_id not in (None, ""):
+        artifact_paths = download_github_run_artifacts(
+            repo_slug=repo_slug,
+            run_id=int(run_id),
+            output_dir=output_dir,
+            token=github_token,
+            api_base_url=api_base_url,
+            log_file=log_file,
+        )
+        for artifact_path in artifact_paths:
+            artifact_total, artifact_failed, artifact_skipped = collect_junit_counts_under(artifact_path)
+            total_tests += artifact_total
+            failed_tests += artifact_failed
+            skipped_tests += artifact_skipped
+        if artifact_paths:
+            append_log(
+                log_file,
+                f"Artifact JUnit counts: tests={total_tests}, failed={failed_tests}, skipped={skipped_tests}",
+            )
     result = WorkflowResult(
         type=executor.type,
         repository=executor.name,
@@ -1104,10 +1212,10 @@ def workflow_result_from_github_run(
         executed_commands=[],
         output_dir=str(output_dir),
         log_file=str(log_file),
-        copied_result_paths=[],
-        total_tests=0,
-        failed_tests=0,
-        skipped_tests=0,
+        copied_result_paths=[str(path) for path in artifact_paths],
+        total_tests=total_tests,
+        failed_tests=failed_tests,
+        skipped_tests=skipped_tests,
         started_at=started_at,
         finished_at=utc_now(),
         details=details,
@@ -2185,6 +2293,25 @@ def collect_junit_counts(repo_dir: Path) -> tuple[int, int, int]:
     return total, failed, skipped
 
 
+def collect_junit_counts_under(root_dir: Path) -> tuple[int, int, int]:
+    if not root_dir.exists():
+        return 0, 0, 0
+    total = 0
+    failed = 0
+    skipped = 0
+    seen: set[Path] = set()
+    for xml_file in root_dir.rglob("*.xml"):
+        resolved = xml_file.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        file_total, file_failed, file_skipped = collect_junit_counts_from_xml(xml_file)
+        total += file_total
+        failed += file_failed
+        skipped += file_skipped
+    return total, failed, skipped
+
+
 def classify_final_status(status: str, details: str, total_tests: int, failed_tests: int) -> tuple[str, str]:
     if status == STATUS_COMMAND_FAILED and total_tests > 0 and failed_tests > 0:
         return STATUS_FAILED, "test failures detected"
@@ -2922,10 +3049,13 @@ def run_parallel_executor(
                 result = workflow_result_from_github_run(
                     executor=executor,
                     outputs_dir=outputs_dir,
+                    repo_slug=repo_slug,
                     workflow_label=item.workflow_label,
                     run=item.completed_run,
                     started_at=item.started_at,
                     elapsed_seconds=int(time.time() - item.dispatch_started_monotonic),
+                    github_token=github_token,
+                    api_base_url=api_base_url,
                 )
                 log_progress(
                     f"     completed {Path(item.workflow_label).stem}: "

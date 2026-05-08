@@ -1824,6 +1824,63 @@ jobs:
         self.assertIn("alpha", combined_logs)
         self.assertIn("beta", combined_logs)
 
+    def test_workflow_result_from_github_run_downloads_artifacts_and_counts_junit(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            executor = run_orchestration_test.TestExecutor(
+                type="playwright-tests",
+                github_url="https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
+                name="repo",
+                branch="main",
+                description="",
+                workflow_globs=[],
+                workflow_files=[],
+                command=[],
+                result_paths=[],
+            )
+            archive_buffer = io.BytesIO()
+            with zipfile.ZipFile(archive_buffer, "w") as archive:
+                archive.writestr(
+                    "playwright-report/junit-report.xml",
+                    '<testsuites tests="2" failures="1" errors="0" skipped="1"><testsuite tests="2" failures="1" errors="0" skipped="1"/></testsuites>',
+                )
+
+            def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+                self.assertIn("/actions/runs/123/artifacts", url)
+                return {
+                    "artifacts": [
+                        {
+                            "id": 456,
+                            "name": "playwright-report",
+                            "archive_download_url": "https://api.example/artifacts/456/zip",
+                            "expired": False,
+                        }
+                    ]
+                }
+
+            with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
+                mock.patch.object(run_orchestration_test, "github_api_bytes", return_value=archive_buffer.getvalue()):
+                result = run_orchestration_test.workflow_result_from_github_run(
+                    executor=executor,
+                    outputs_dir=temp_dir / "outputs",
+                    repo_slug="specmatic/specmatic-studio-playwright-ts-tests",
+                    workflow_label=".github/workflows/playwright-soap-spec.yml",
+                    run={
+                        "id": 123,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://example.com/run/123",
+                    },
+                    started_at="2026-05-08T00:00:00Z",
+                    elapsed_seconds=5,
+                    github_token="token",
+                    api_base_url="https://api.github.com",
+                )
+
+            self.assertEqual(result.total_tests, 2)
+            self.assertEqual(result.failed_tests, 1)
+            self.assertEqual(result.skipped_tests, 1)
+            self.assertTrue(result.copied_result_paths)
+
     def test_renders_consolidated_dashboard_and_workflow_page(self) -> None:
         with workspace_temp_dir() as temp_dir:
             output_dir = temp_dir / "outputs"
