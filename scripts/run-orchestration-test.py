@@ -57,7 +57,7 @@ STATUS_STARTUP_FAILURE = "startup_failure"
 PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
 WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
-SKIPPED_WORKFLOW_FILE_NAMES = {"copilot-setup-steps.yml","playwright-enterprise-release-gate.yml"}
+SKIPPED_WORKFLOW_FILE_NAMES = {"copilot-setup-steps.yml","playwright-enterprise-release-gate.yml,playwright-test-group.yml"}
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 ENTERPRISE_SNAPSHOT_REPO_URL = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
 ENTERPRISE_RELEASE_REPO_URL = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
@@ -805,6 +805,38 @@ def github_api_bytes(method: str, url: str, token: str, ok_statuses: set[int] | 
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
+def download_github_artifact_bytes(url: str, token: str) -> bytes:
+    request = urllib.request.Request(url, method="GET")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    opener = urllib.request.build_opener(NoRedirectHandler())
+    try:
+        with opener.open(request, timeout=120) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code not in {301, 302, 303, 307, 308}:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+        redirect_url = exc.headers.get("Location")
+        if not redirect_url:
+            raise RuntimeError(f"GitHub artifact download redirect missing Location header for {url}") from exc
+
+        redirect_request = urllib.request.Request(redirect_url, method="GET")
+        try:
+            with urllib.request.urlopen(redirect_request, timeout=120) as response:
+                return response.read()
+        except urllib.error.HTTPError as redirect_exc:
+            body = redirect_exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"GitHub artifact redirect download failed ({redirect_exc.code}): {body}") from redirect_exc
+
+
 def safe_artifact_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip())
     return cleaned.strip(".-") or "artifact"
@@ -850,7 +882,7 @@ def download_github_run_artifacts(
         archive_path = artifact_root / f"{artifact_name}.zip"
         extract_dir = artifact_root / artifact_name
         try:
-            archive_bytes = github_api_bytes("GET", archive_url, token)
+            archive_bytes = download_github_artifact_bytes(archive_url, token)
             archive_path.write_bytes(archive_bytes)
             remove_tree(extract_dir)
             extract_dir.mkdir(parents=True, exist_ok=True)

@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import unittest
+import urllib.error
 import uuid
 import zipfile
 from contextlib import contextmanager, redirect_stdout
@@ -1868,7 +1869,7 @@ jobs:
                 }
 
             with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
-                mock.patch.object(run_orchestration_test, "github_api_bytes", return_value=archive_buffer.getvalue()):
+                mock.patch.object(run_orchestration_test, "download_github_artifact_bytes", return_value=archive_buffer.getvalue()):
                 result = run_orchestration_test.workflow_result_from_github_run(
                     executor=executor,
                     outputs_dir=temp_dir / "outputs",
@@ -1890,6 +1891,46 @@ jobs:
             self.assertEqual(result.failed_tests, 1)
             self.assertEqual(result.skipped_tests, 1)
             self.assertTrue(result.copied_result_paths)
+
+    def test_download_github_artifact_bytes_follows_redirect_without_auth_header(self) -> None:
+        archive_bytes = b"zip-bytes"
+
+        class FakeOpener:
+            def open(self, request, timeout=120):
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    302,
+                    "Found",
+                    {"Location": "https://artifactcache.actions.githubusercontent.com/fake-signed-url"},
+                    io.BytesIO(b""),
+                )
+
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def read(self) -> bytes:
+                return self.body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        def fake_urlopen(request, timeout=120):
+            self.assertEqual(request.full_url, "https://artifactcache.actions.githubusercontent.com/fake-signed-url")
+            self.assertIsNone(request.get_header("Authorization"))
+            return FakeResponse(archive_bytes)
+
+        with mock.patch.object(run_orchestration_test.urllib.request, "build_opener", return_value=FakeOpener()), \
+            mock.patch.object(run_orchestration_test.urllib.request, "urlopen", side_effect=fake_urlopen):
+            downloaded = run_orchestration_test.download_github_artifact_bytes(
+                "https://api.github.com/repos/specmatic/repo/actions/artifacts/123/zip",
+                "token",
+            )
+
+        self.assertEqual(downloaded, archive_bytes)
 
     def test_collect_test_counts_under_supports_report_format_fallbacks(self) -> None:
         with workspace_temp_dir() as temp_dir:
