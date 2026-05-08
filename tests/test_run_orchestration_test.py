@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import unittest
 import urllib.error
 import uuid
@@ -1763,6 +1764,15 @@ jobs:
         self.assertIn("sample-project/specmatic-order-bff-java", table)
         self.assertIn("8", table)
         self.assertIn("2", table)
+
+    def test_log_progress_does_not_fail_on_cp1252_stdout(self) -> None:
+        with tempfile.TemporaryFile("w+", encoding="cp1252") as stdout:
+            with mock.patch("sys.stdout", stdout):
+                run_orchestration_test.log_progress("✅ passed")
+                stdout.seek(0)
+                output = stdout.read()
+
+        self.assertIn("? passed", output)
 
     def test_renders_parallel_progress_table_with_compact_statuses(self) -> None:
         pending = run_orchestration_test.ParallelWorkflowRun(

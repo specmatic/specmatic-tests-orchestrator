@@ -460,7 +460,12 @@ def relative_href(from_path: Path, to_path: Path) -> str:
 
 
 def log_progress(message: str) -> None:
-    print(message, flush=True)
+    try:
+        print(message, flush=True)
+    except UnicodeEncodeError:
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_message = message.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe_message, flush=True)
 
 
 def compact_command(command: str, max_length: int = 120) -> str:
