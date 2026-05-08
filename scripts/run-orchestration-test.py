@@ -54,6 +54,10 @@ STATUS_TIMED_OUT = "timed_out"
 STATUS_ACTION_REQUIRED = "action_required"
 STATUS_NEUTRAL = "neutral"
 STATUS_STARTUP_FAILURE = "startup_failure"
+SKIPPED_WORKFLOW_FILE_NAMES = {
+    "playwright-enterprise-release-gate.yml",
+    "playwright-enterprise-release-gate.yaml",
+}
 PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
 WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
@@ -1525,6 +1529,8 @@ def parse_reusable_workflow_calls(lines: list[str]) -> list[ReusableWorkflowCall
 
 def should_consider_workflow_for_execution_text(text: str, workflow_label: str) -> bool:
     lines = text.splitlines()
+    if Path(workflow_label).name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
+        return False
     if is_reusable_only_workflow_text(text):
         return False
     synthetic_repo_dir = Path.cwd()
@@ -1535,7 +1541,7 @@ def should_consider_workflow_for_execution_text(text: str, workflow_label: str) 
         lines=lines,
         input_values={},
     )
-    if commands:
+    if any(is_test_command(command.command) for command in commands):
         return True
     return bool(parse_reusable_workflow_calls(lines))
 
@@ -3380,6 +3386,18 @@ def dispatchable_results(results: list[WorkflowResult]) -> list[WorkflowResult]:
     return [result for result in results if not is_non_dispatchable_workflow_result(result)]
 
 
+def concise_result_details(details: str) -> str:
+    value = str(details or "").strip()
+    if not value:
+        return "n/a"
+    for token in value.replace("(", " ").replace(")", " ").split():
+        if token.startswith("http://") or token.startswith("https://"):
+            return token.rstrip(".,;")
+    if len(value) > 120:
+        return value[:117] + "..."
+    return value
+
+
 def actionable_step_for_result(result: WorkflowResult) -> str:
     details = result.details.lower()
     if "does not declare workflow_dispatch" in details:
@@ -3452,7 +3470,7 @@ def render_summary_table(results: list[WorkflowResult]) -> str:
         [
             f"{result.type}/{result.repository}",
             Path(result.workflow).stem,
-            result.status,
+            f"{status_symbol(result.status)} {result.status}",
             str(result.total_tests),
             str(result.failed_tests),
             str(result.skipped_tests),
@@ -3722,7 +3740,7 @@ def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[W
               <td>{html_escape(result.failed_tests)}</td>
               <td>{html_escape(result.total_tests)}</td>
               <td>{html_escape(result.skipped_tests)}</td>
-              <td>{html_escape(result.details)}</td>
+              <td>{html_escape(concise_result_details(result.details))}</td>
             </tr>
             """
         )

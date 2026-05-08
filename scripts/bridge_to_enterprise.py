@@ -93,6 +93,54 @@ def summary_count(summary: dict[str, Any], key: str) -> int | None:
     return sum_result_ints(summary, key)
 
 
+def markdown_escape(value: Any) -> str:
+    return str(value).replace("|", "\\|")
+
+
+def workflow_display_name(workflow: Any) -> str:
+    value = str(workflow or "n/a")
+    if value == "n/a":
+        return value
+    return Path(value).name
+
+
+def status_with_icon(status: Any) -> str:
+    normalized = str(status or "n/a").strip().lower()
+    icons = {
+        "passed": "✅",
+        "success": "✅",
+        "failed": "❌",
+        "failure": "❌",
+        "command_failed": "❌",
+        "setup_failed": "❌",
+        "clone_failed": "❌",
+        "checkout_failed": "❌",
+        "missing_repo_url": "❌",
+        "no_workflows": "❌",
+        "no_test_commands": "❌",
+        "startup_failure": "❌",
+        "skipped": "⏭️",
+        "cancelled": "🚫",
+        "timed_out": "⏱️",
+        "action_required": "⚠️",
+        "neutral": "➖",
+    }
+    icon = icons.get(normalized, "❔")
+    return f"{icon} {normalized or 'n/a'}"
+
+
+def concise_result_details(details: Any) -> str:
+    value = str(details or "").strip()
+    if not value:
+        return "n/a"
+    for token in value.replace("(", " ").replace(")", " ").split():
+        if token.startswith("http://") or token.startswith("https://"):
+            return token.rstrip(".,;")
+    if len(value) > 120:
+        return value[:117] + "..."
+    return value
+
+
 def infer_conclusion(summary: dict[str, Any]) -> str:
     def normalized(text: Any) -> str | None:
         if not isinstance(text, str):
@@ -155,28 +203,29 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
                 "",
                 "Workflow results:",
                 "",
-                "| Repository | Workflow | Status | Tests | Failed | Skipped | Details |",
-                "| --- | --- | --- | ---: | ---: | ---: | --- |",
+                "| Repository | Workflow | Status | Duration | Tests | Failed | Skipped | Details |",
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for result in results:
             if not isinstance(result, dict):
                 continue
             repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
-            details = str(result.get("details") or "").replace("|", "\\|")
-            if len(details) > 180:
-                details = details[:177] + "..."
+            details = concise_result_details(result.get("details"))
+            duration = as_int(result.get("duration_seconds"))
+            duration_display = f"{duration}s" if duration is not None else "n/a"
             body.append(
                 "| "
                 + " | ".join(
                     [
-                        repository or "n/a",
-                        str(result.get("workflow", "n/a")),
-                        str(result.get("status", "n/a")),
+                        markdown_escape(repository or "n/a"),
+                        markdown_escape(workflow_display_name(result.get("workflow"))),
+                        markdown_escape(status_with_icon(result.get("status"))),
+                        duration_display,
                         str(result.get("total_tests", "n/a")),
                         str(result.get("failed_tests", "n/a")),
                         str(result.get("skipped_tests", "n/a")),
-                        details or "n/a",
+                        markdown_escape(details),
                     ]
                 )
                 + " |"
@@ -251,28 +300,29 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, orchestra
                 "",
                 "Workflow results:",
                 "",
-                "| Repository | Workflow | Status | Tests | Failed | Skipped | Details |",
-                "| --- | --- | --- | ---: | ---: | ---: | --- |",
+                "| Repository | Workflow | Status | Duration | Tests | Failed | Skipped | Details |",
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for result in results:
             if not isinstance(result, dict):
                 continue
             repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
-            details = str(result.get("details") or "").replace("|", "\\|")
-            if len(details) > 180:
-                details = details[:177] + "..."
+            details = concise_result_details(result.get("details"))
+            duration = as_int(result.get("duration_seconds"))
+            duration_display = f"{duration}s" if duration is not None else "n/a"
             body.append(
                 "| "
                 + " | ".join(
                     [
-                        repository or "n/a",
-                        str(result.get("workflow", "n/a")),
-                        str(result.get("status", "n/a")),
+                        markdown_escape(repository or "n/a"),
+                        markdown_escape(workflow_display_name(result.get("workflow"))),
+                        markdown_escape(status_with_icon(result.get("status"))),
+                        duration_display,
                         str(result.get("total_tests", "n/a")),
                         str(result.get("failed_tests", "n/a")),
                         str(result.get("skipped_tests", "n/a")),
-                        details or "n/a",
+                        markdown_escape(details),
                     ]
                 )
                 + " |"

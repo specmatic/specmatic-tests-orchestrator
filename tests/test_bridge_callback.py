@@ -150,18 +150,22 @@ class BridgeCallbackTest(unittest.TestCase):
                                 "repository": "contract-tests",
                                 "workflow": ".github/workflows/gradle.yml",
                                 "status": "failed",
+                                "duration_seconds": 118,
                                 "total_tests": 227,
                                 "failed_tests": 5,
                                 "skipped_tests": 4,
+                                "details": "GitHub Actions workflow_dispatch concluded with failure; details: http://example.local/workflows/gradle",
                             },
                             {
                                 "type": "sample-project",
                                 "repository": "asyncapi-tests",
                                 "workflow": ".github/workflows/gradle.yml",
                                 "status": "failed",
+                                "duration_seconds": 34,
                                 "total_tests": 6,
                                 "failed_tests": 1,
                                 "skipped_tests": 1,
+                                "details": "GitHub Actions workflow_dispatch concluded with failure; details: http://example.local/workflows/asyncapi",
                             },
                         ],
                     }
@@ -217,7 +221,10 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertIn("| Total workflows | 2 |", step_summary)
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
-                self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | failed | 227 | 5 | 4 |", step_summary)
+                self.assertIn(
+                    "| sample-project/contract-tests | gradle.yml | ❌ failed | 118s | 227 | 5 | 4 | http://example.local/workflows/gradle |",
+                    step_summary,
+                )
                 self.assertIn("Error summary and actionable steps:", step_summary)
                 self.assertIn("Add workflow_dispatch to the target workflow", step_summary)
                 self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", step_summary)
@@ -242,10 +249,11 @@ class BridgeCallbackTest(unittest.TestCase):
                     "repository": "contract-tests",
                     "workflow": ".github/workflows/gradle.yml",
                     "status": "command_failed",
+                    "duration_seconds": 46,
                     "total_tests": 0,
                     "failed_tests": 0,
                     "skipped_tests": 0,
-                    "details": "3 command(s) failed",
+                    "details": "3 command(s) failed; details: http://example.local/workflows/gradle",
                 }
             ],
         }
@@ -260,7 +268,7 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Failed workflows | 1 |", markdown)
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
-        self.assertIn("| sample-project/contract-tests | .github/workflows/gradle.yml | command_failed | 0 | 0 | 0 | 3 command(s) failed |", markdown)
+        self.assertIn("| sample-project/contract-tests | gradle.yml | ❌ command_failed | 46s | 0 | 0 | 0 | http://example.local/workflows/gradle |", markdown)
         self.assertNotIn("Summary JSON excerpt", markdown)
         self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", markdown)
 
