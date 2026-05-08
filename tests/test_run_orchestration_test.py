@@ -652,6 +652,68 @@ jobs:
             self.assertIn("npx playwright install chromium --with-deps", command_values)
             self.assertIn("npx playwright test specs/openapi/execute-contract-tests", command_values)
 
+    def test_skips_reusable_only_playwright_workflow_for_dispatch(self) -> None:
+        workflow_text = """
+name: Playwright Test Group
+on:
+  workflow_call:
+    inputs:
+      test_path:
+        required: true
+        type: string
+jobs:
+  test:
+    steps:
+      - run: npx playwright test ${{ inputs.test_path }}
+""".lstrip()
+
+        self.assertFalse(
+            run_orchestration_test.should_consider_workflow_for_execution_text(
+                workflow_text,
+                ".github/workflows/playwright-test-group.yml",
+            )
+        )
+
+    def test_skips_setup_only_workflow_even_when_dispatchable(self) -> None:
+        workflow_text = """
+name: Copilot Setup Steps
+on:
+  workflow_dispatch:
+  push:
+jobs:
+  copilot-setup-steps:
+    steps:
+      - run: npm ci
+      - run: npx playwright install --with-deps
+      - run: npm run build
+""".lstrip()
+
+        self.assertFalse(
+            run_orchestration_test.should_consider_workflow_for_execution_text(
+                workflow_text,
+                ".github/workflows/copilot-setup-steps.yml",
+            )
+        )
+
+    def test_keeps_dispatchable_workflow_that_calls_reusable_test_workflow(self) -> None:
+        workflow_text = """
+name: Studio Contract Tests
+on:
+  workflow_dispatch:
+jobs:
+  execute-contract-tests:
+    uses: ./.github/workflows/playwright-test-group.yml
+    with:
+      test_path: specs/openapi/execute-contract-tests
+""".lstrip()
+
+        self.assertTrue(
+            run_orchestration_test.should_consider_workflow_for_execution_text(
+                workflow_text,
+                ".github/workflows/playwright-openapi-contract.yml",
+            )
+        )
+
     def test_expands_matrix_include_commands(self) -> None:
         original_is_linux_host = run_orchestration_test.is_linux_host
         try:
@@ -1796,12 +1858,12 @@ jobs:
                 run_orchestration_test.RemoteWorkflowFile(
                     label=".github/workflows/alpha.yml",
                     name="alpha.yml",
-                    text="name: alpha\non:\n  workflow_dispatch:\n",
+                    text="name: alpha\non:\n  workflow_dispatch:\njobs:\n  test:\n    steps:\n      - run: npm test\n",
                 ),
                 run_orchestration_test.RemoteWorkflowFile(
                     label=".github/workflows/beta.yml",
                     name="beta.yml",
-                    text="name: beta\non:\n  workflow_dispatch:\n",
+                    text="name: beta\non:\n  workflow_dispatch:\njobs:\n  test:\n    steps:\n      - run: npm test\n",
                 ),
             ]
 

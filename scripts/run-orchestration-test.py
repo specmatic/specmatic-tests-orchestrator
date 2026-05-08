@@ -57,7 +57,6 @@ STATUS_STARTUP_FAILURE = "startup_failure"
 PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
 WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
-SKIPPED_WORKFLOW_FILE_NAMES = {"copilot-setup-steps.yml","playwright-enterprise-release-gate.yml","playwright-test-group.yml"}
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 ENTERPRISE_SNAPSHOT_REPO_URL = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
 ENTERPRISE_RELEASE_REPO_URL = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
@@ -1298,6 +1297,20 @@ def is_reusable_only_workflow(workflow_file: Path) -> bool:
     return not any(marker in text for marker in trigger_markers)
 
 
+def is_reusable_only_workflow_text(text: str) -> bool:
+    normalized = text.lower()
+    if "workflow_call:" not in normalized:
+        return False
+    trigger_markers = (
+        "push:",
+        "pull_request:",
+        "workflow_dispatch:",
+        "repository_dispatch:",
+        "schedule:",
+    )
+    return not any(marker in normalized for marker in trigger_markers)
+
+
 def parse_inline_value(line: str) -> str:
     _, _, remainder = line.partition(":")
     return strip_yaml_value(remainder)
@@ -1510,6 +1523,50 @@ def parse_reusable_workflow_calls(lines: list[str]) -> list[ReusableWorkflowCall
         calls.append(ReusableWorkflowCall(workflow_path=workflow_file, inputs=inputs))
 
     return calls
+
+
+def workflow_contains_runnable_test_commands(lines: list[str], workflow_label: str) -> bool:
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped.startswith("run:"):
+            index += 1
+            continue
+
+        raw_value = stripped[4:].strip()
+        if raw_value in {"|", "|-", "|+", ">", ">-", ">+"}:
+            block_indent = len(line) - len(line.lstrip(" ")) + 2
+            run_block, index = collect_yaml_block(lines, index + 1, block_indent)
+            for command in split_logical_commands(run_block):
+                normalized = normalize_shellish_command(command)
+                if normalized and is_runnable_workflow_command(normalized, workflow_label):
+                    return True
+            continue
+
+        normalized = normalize_shellish_command(strip_yaml_value(raw_value))
+        if normalized and is_runnable_workflow_command(normalized, workflow_label):
+            return True
+        index += 1
+
+    return False
+
+
+def should_consider_workflow_for_execution_text(text: str, workflow_label: str) -> bool:
+    lines = text.splitlines()
+    if is_reusable_only_workflow_text(text):
+        return False
+    if workflow_contains_runnable_test_commands(lines, workflow_label):
+        return True
+    return bool(parse_reusable_workflow_calls(lines))
+
+
+def should_consider_workflow_for_execution(workflow_file: Path, repo_dir: Path) -> bool:
+    relative_workflow_path = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
+    return should_consider_workflow_for_execution_text(
+        workflow_file.read_text(encoding="utf-8"),
+        relative_workflow_path,
+    )
 
 
 def is_test_command(command: str) -> bool:
@@ -2890,9 +2947,7 @@ def run_executor(
 
     results: list[WorkflowResult] = []
     for workflow_file in workflow_files:
-        if workflow_file.name.lower() in SKIPPED_WORKFLOW_FILE_NAMES:
-            continue
-        if is_reusable_only_workflow(workflow_file):
+        if not should_consider_workflow_for_execution(workflow_file, repo_dir):
             continue
         commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
         workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
@@ -2981,7 +3036,7 @@ def run_parallel_executor(
     candidate_workflow_files = [
         workflow_file
         for workflow_file in discovered_workflow_files
-        if workflow_file.name.lower() not in SKIPPED_WORKFLOW_FILE_NAMES
+        if should_consider_workflow_for_execution_text(workflow_file.text, workflow_file.label)
     ]
     workflow_files = [
         workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger_in_text(workflow_file.text)
