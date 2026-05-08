@@ -14,7 +14,8 @@
     .panel { background: rgba(18,26,43,.92); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 20px; }
     .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; font-weight: 700; background: var(--panel-2); }
     .badge.passed { color: #06140d; background: var(--good); }
-    .badge.failed, .badge.clone_failed, .badge.checkout_failed, .badge.missing_repo_url, .badge.no_workflows, .badge.no_test_commands, .badge.command_failed, .badge.setup_failed { color: white; background: var(--bad); }
+    .badge.failed, .badge.clone_failed, .badge.checkout_failed, .badge.missing_repo_url, .badge.no_workflows, .badge.no_test_commands, .badge.command_failed, .badge.setup_failed, .badge.cancelled, .badge.timed_out, .badge.action_required, .badge.startup_failure { color: white; background: var(--bad); }
+    .badge.skipped, .badge.neutral { color: #06140d; background: var(--warn); }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
     .metric { background: var(--panel-2); border-radius: 10px; padding: 14px; }
     .metric .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }

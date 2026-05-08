@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import shutil
 import sys
@@ -213,9 +214,18 @@ on:
 
         self.assertEqual(summary["error_summary"][0]["repository"], "sample-project/contract-tests")
         self.assertIn("Add workflow_dispatch", summary["error_summary"][0]["action"])
+        self.assertEqual(len(summary["non_dispatchable_workflows"]), 1)
         rendered = run_orchestration_test.render_error_summary(summary["error_summary"])
         self.assertIn("Error Summary and Actionable Steps", rendered)
         self.assertIn("Action: Add workflow_dispatch", rendered)
+        main_table = run_orchestration_test.render_summary_table(
+            run_orchestration_test.dispatchable_results([result])
+        )
+        skipped_table = run_orchestration_test.render_non_dispatchable_workflow_table([result])
+
+        self.assertNotIn("sample-project/contract-tests", main_table)
+        self.assertIn("sample-project/contract-tests", skipped_table)
+        self.assertIn("missing workflow_dispatch", skipped_table)
 
     def test_discover_remote_workflow_files_reads_workflows_via_github_api(self) -> None:
         executor = run_orchestration_test.TestExecutor(
@@ -1820,7 +1830,7 @@ jobs:
         self.assertIn("discovered 2 dispatchable workflow files", combined_logs)
         self.assertIn("Dispatched successfully: 2/2 workflows", combined_logs)
         self.assertIn("Parallel workflow progress - Polling attempt 1", combined_logs)
-        self.assertIn("==================================================", combined_logs)
+        self.assertIn("Parallel workflow progress - Polling attempt 2", combined_logs)
         self.assertIn("alpha", combined_logs)
         self.assertIn("beta", combined_logs)
 
@@ -1881,6 +1891,72 @@ jobs:
             self.assertEqual(result.skipped_tests, 1)
             self.assertTrue(result.copied_result_paths)
 
+    def test_collect_test_counts_under_supports_report_format_fallbacks(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            playwright_dir = temp_dir / "playwright"
+            playwright_dir.mkdir()
+            (playwright_dir / "test-results.json").write_text(
+                json.dumps(
+                    {
+                        "stats": {
+                            "expected": 3,
+                            "unexpected": 1,
+                            "flaky": 1,
+                            "skipped": 2,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            total, failed, skipped, report_format = run_orchestration_test.collect_test_counts_under(playwright_dir)
+
+            self.assertEqual((total, failed, skipped, report_format), (7, 1, 2, "playwright-json"))
+
+            ctrf_dir = temp_dir / "ctrf"
+            ctrf_dir.mkdir()
+            (ctrf_dir / "ctrf-report.json").write_text(
+                json.dumps(
+                    {
+                        "results": {
+                            "summary": {
+                                "tests": 4,
+                                "passed": 2,
+                                "failed": 1,
+                                "skipped": 1,
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            total, failed, skipped, report_format = run_orchestration_test.collect_test_counts_under(ctrf_dir)
+
+            self.assertEqual((total, failed, skipped, report_format), (4, 1, 1, "ctrf"))
+
+    def test_github_conclusion_to_workflow_status_preserves_non_success_conclusions(self) -> None:
+        self.assertEqual(
+            run_orchestration_test.github_conclusion_to_workflow_status("success"),
+            run_orchestration_test.STATUS_PASSED,
+        )
+        self.assertEqual(
+            run_orchestration_test.github_conclusion_to_workflow_status("skipped"),
+            run_orchestration_test.STATUS_SKIPPED,
+        )
+        self.assertEqual(
+            run_orchestration_test.github_conclusion_to_workflow_status("cancelled"),
+            run_orchestration_test.STATUS_CANCELLED,
+        )
+        self.assertEqual(
+            run_orchestration_test.github_conclusion_to_workflow_status("timed_out"),
+            run_orchestration_test.STATUS_TIMED_OUT,
+        )
+        self.assertEqual(
+            run_orchestration_test.github_conclusion_to_workflow_status("action_required"),
+            run_orchestration_test.STATUS_ACTION_REQUIRED,
+        )
+
     def test_renders_consolidated_dashboard_and_workflow_page(self) -> None:
         with workspace_temp_dir() as temp_dir:
             output_dir = temp_dir / "outputs"
@@ -1928,6 +2004,70 @@ jobs:
             self.assertTrue((output_dir / "index.html").exists())
             self.assertTrue((workflow_output / "index.html").exists())
             self.assertIn("repo-a", (output_dir / "index.html").read_text(encoding="utf-8"))
+
+    def test_dashboard_moves_non_dispatchable_workflows_to_separate_section(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            output_dir = temp_dir / "outputs"
+            runnable_output = output_dir / "sample-project" / "repo-a" / "gradle"
+            skipped_output = output_dir / "playwright-tests" / "repo-b" / "playwright-async-spec"
+            runnable_output.mkdir(parents=True)
+            skipped_output.mkdir(parents=True)
+            for workflow_output in (runnable_output, skipped_output):
+                (workflow_output / "run.log").write_text("log", encoding="utf-8")
+
+            runnable = run_orchestration_test.WorkflowResult(
+                type="sample-project",
+                repository="repo-a",
+                repo_url="https://example.com/repo-a.git",
+                branch="main",
+                workflow=".github/workflows/gradle.yml",
+                status=run_orchestration_test.STATUS_PASSED,
+                exit_code=0,
+                duration_seconds=4,
+                commands=["./gradlew test"],
+                executed_commands=[],
+                output_dir=str(runnable_output),
+                log_file=str(runnable_output / "run.log"),
+                copied_result_paths=[],
+                total_tests=5,
+                failed_tests=0,
+                skipped_tests=0,
+                started_at="2026-01-01T00:00:00+00:00",
+                finished_at="2026-01-01T00:00:04+00:00",
+                details="ok",
+            )
+            non_dispatchable = run_orchestration_test.WorkflowResult(
+                type="playwright-tests",
+                repository="repo-b",
+                repo_url="https://example.com/repo-b.git",
+                branch="main",
+                workflow=".github/workflows/playwright-async-spec.yml",
+                status=run_orchestration_test.STATUS_SETUP_FAILED,
+                exit_code=1,
+                duration_seconds=0,
+                commands=[],
+                executed_commands=[],
+                output_dir=str(skipped_output),
+                log_file=str(skipped_output / "run.log"),
+                copied_result_paths=[],
+                total_tests=0,
+                failed_tests=0,
+                skipped_tests=0,
+                started_at="2026-01-01T00:00:00+00:00",
+                finished_at="2026-01-01T00:00:00+00:00",
+                details=".github/workflows/playwright-async-spec.yml cannot be dispatched because it does not declare workflow_dispatch.",
+            )
+            summary = run_orchestration_test.build_summary([runnable, non_dispatchable])
+
+            run_orchestration_test.render_html_reports(output_dir, summary, [runnable, non_dispatchable])
+
+            dashboard = (output_dir / "index.html").read_text(encoding="utf-8")
+            main_table = dashboard.split("Skipped Workflows Without workflow_dispatch", maxsplit=1)[0]
+            skipped_section = dashboard.split("Skipped Workflows Without workflow_dispatch", maxsplit=1)[1]
+            self.assertIn("repo-a", main_table)
+            self.assertNotIn("repo-b", main_table)
+            self.assertIn("repo-b", skipped_section)
+            self.assertIn("missing workflow_dispatch", skipped_section)
 
     def test_copy_result_paths_preserves_relative_structure(self) -> None:
         with workspace_temp_dir() as temp_dir:

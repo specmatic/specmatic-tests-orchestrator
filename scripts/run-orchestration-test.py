@@ -49,6 +49,11 @@ STATUS_NO_WORKFLOWS = "no_workflows"
 STATUS_NO_COMMANDS = "no_test_commands"
 STATUS_SETUP_FAILED = "setup_failed"
 STATUS_SKIPPED = "skipped"
+STATUS_CANCELLED = "cancelled"
+STATUS_TIMED_OUT = "timed_out"
+STATUS_ACTION_REQUIRED = "action_required"
+STATUS_NEUTRAL = "neutral"
+STATUS_STARTUP_FAILURE = "startup_failure"
 PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
 WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
@@ -1090,7 +1095,7 @@ def parallel_workflow_status(item: ParallelWorkflowRun) -> str:
         return "failed"
     if item.completed_run is not None:
         conclusion = str(item.completed_run.get("conclusion") or item.conclusion or "").lower()
-        return "success" if conclusion == "success" else "failed"
+        return github_conclusion_to_workflow_status(conclusion)
     return "pending"
 
 
@@ -1141,6 +1146,25 @@ def render_parallel_progress_table(items: list[ParallelWorkflowRun], polling_att
     )
 
 
+def github_conclusion_to_workflow_status(conclusion: str) -> str:
+    normalized = conclusion.strip().lower()
+    if normalized == "success":
+        return STATUS_PASSED
+    if normalized == "skipped":
+        return STATUS_SKIPPED
+    if normalized == "cancelled":
+        return STATUS_CANCELLED
+    if normalized == "timed_out":
+        return STATUS_TIMED_OUT
+    if normalized == "action_required":
+        return STATUS_ACTION_REQUIRED
+    if normalized == "neutral":
+        return STATUS_NEUTRAL
+    if normalized == "startup_failure":
+        return STATUS_STARTUP_FAILURE
+    return STATUS_FAILED
+
+
 def workflow_result_from_github_run(
     executor: TestExecutor,
     outputs_dir: Path,
@@ -1157,7 +1181,7 @@ def workflow_result_from_github_run(
     log_file = output_dir / "run.log"
     output_dir.mkdir(parents=True, exist_ok=True)
     conclusion = str(run.get("conclusion") or "failure")
-    status = STATUS_PASSED if conclusion == "success" else STATUS_FAILED
+    status = github_conclusion_to_workflow_status(conclusion)
     html_url = str(run.get("html_url") or "")
     details = f"GitHub Actions workflow_dispatch concluded with {conclusion}"
     if html_url:
@@ -1190,14 +1214,18 @@ def workflow_result_from_github_run(
             log_file=log_file,
         )
         for artifact_path in artifact_paths:
-            artifact_total, artifact_failed, artifact_skipped = collect_junit_counts_under(artifact_path)
+            artifact_total, artifact_failed, artifact_skipped, report_format = collect_test_counts_under(artifact_path)
             total_tests += artifact_total
             failed_tests += artifact_failed
             skipped_tests += artifact_skipped
+            append_log(
+                log_file,
+                f"Artifact report counts ({report_format}): tests={artifact_total}, failed={artifact_failed}, skipped={artifact_skipped}",
+            )
         if artifact_paths:
             append_log(
                 log_file,
-                f"Artifact JUnit counts: tests={total_tests}, failed={failed_tests}, skipped={skipped_tests}",
+                f"Artifact total counts: tests={total_tests}, failed={failed_tests}, skipped={skipped_tests}",
             )
     result = WorkflowResult(
         type=executor.type,
@@ -2312,6 +2340,62 @@ def collect_junit_counts_under(root_dir: Path) -> tuple[int, int, int]:
     return total, failed, skipped
 
 
+def parse_playwright_json_summary(report_file: Path) -> tuple[int, int, int]:
+    try:
+        payload = json.loads(report_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0, 0, 0
+    stats = payload.get("stats")
+    if not isinstance(stats, dict):
+        return 0, 0, 0
+    expected = to_int(stats.get("expected"))
+    unexpected = to_int(stats.get("unexpected"))
+    flaky = to_int(stats.get("flaky"))
+    skipped = to_int(stats.get("skipped"))
+    total = expected + unexpected + flaky + skipped
+    return total, unexpected, skipped
+
+
+def collect_ctrf_counts_under(root_dir: Path) -> tuple[int, int, int]:
+    total = 0
+    failed = 0
+    skipped = 0
+    for json_file in sorted(root_dir.rglob("*.json")):
+        file_total, _passed, file_failed, file_skipped = parse_ctrf_summary(json_file)
+        total += file_total
+        failed += file_failed
+        skipped += file_skipped
+    return total, failed, skipped
+
+
+def collect_playwright_json_counts_under(root_dir: Path) -> tuple[int, int, int]:
+    total = 0
+    failed = 0
+    skipped = 0
+    for json_file in sorted(root_dir.rglob("*.json")):
+        file_total, file_failed, file_skipped = parse_playwright_json_summary(json_file)
+        total += file_total
+        failed += file_failed
+        skipped += file_skipped
+    return total, failed, skipped
+
+
+def collect_test_counts_under(root_dir: Path) -> tuple[int, int, int, str]:
+    junit_total, junit_failed, junit_skipped = collect_junit_counts_under(root_dir)
+    if junit_total:
+        return junit_total, junit_failed, junit_skipped, "junit"
+
+    ctrf_total, ctrf_failed, ctrf_skipped = collect_ctrf_counts_under(root_dir)
+    if ctrf_total:
+        return ctrf_total, ctrf_failed, ctrf_skipped, "ctrf"
+
+    playwright_total, playwright_failed, playwright_skipped = collect_playwright_json_counts_under(root_dir)
+    if playwright_total:
+        return playwright_total, playwright_failed, playwright_skipped, "playwright-json"
+
+    return 0, 0, 0, "none"
+
+
 def classify_final_status(status: str, details: str, total_tests: int, failed_tests: int) -> tuple[str, str]:
     if status == STATUS_COMMAND_FAILED and total_tests > 0 and failed_tests > 0:
         return STATUS_FAILED, "test failures detected"
@@ -3079,11 +3163,12 @@ def run_parallel_executor(
 
 
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
-    successful_statuses = {STATUS_PASSED, STATUS_SKIPPED}
+    successful_statuses = {STATUS_PASSED, STATUS_SKIPPED, STATUS_NEUTRAL}
     failed = [result for result in results if result.status not in successful_statuses]
     repos_where_tests_ran = sorted({result.repository for result in results if result.executed_commands})
     repos_where_tests_did_not_run = sorted({result.repository for result in results if not result.executed_commands})
     error_summary = build_error_summary(failed)
+    non_dispatchable_workflows = [result for result in results if is_non_dispatchable_workflow_result(result)]
 
     return {
         "conclusion": "success" if not failed else "failure",
@@ -3097,8 +3182,20 @@ def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
         "failed_tests": sum(result.failed_tests for result in results),
         "skipped_tests": sum(result.skipped_tests for result in results),
         "error_summary": error_summary,
+        "non_dispatchable_workflows": [asdict(result) for result in non_dispatchable_workflows],
         "results": [asdict(result) for result in results],
     }
+
+
+def is_non_dispatchable_workflow_result(result: WorkflowResult) -> bool:
+    return (
+        result.status == STATUS_SETUP_FAILED
+        and "does not declare workflow_dispatch" in result.details.lower()
+    )
+
+
+def dispatchable_results(results: list[WorkflowResult]) -> list[WorkflowResult]:
+    return [result for result in results if not is_non_dispatchable_workflow_result(result)]
 
 
 def actionable_step_for_result(result: WorkflowResult) -> str:
@@ -3195,9 +3292,45 @@ def render_summary_table(results: list[WorkflowResult]) -> str:
     return "\n".join([render_row(headers), separator, *(render_row(row) for row in rows)])
 
 
+def render_non_dispatchable_workflow_table(results: list[WorkflowResult]) -> str:
+    skipped_results = [result for result in results if is_non_dispatchable_workflow_result(result)]
+    if not skipped_results:
+        return ""
+    headers = ["Repository", "Workflow", "Reason", "Log"]
+    rows = [
+        [
+            f"{result.type}/{result.repository}",
+            Path(result.workflow).stem,
+            "missing workflow_dispatch",
+            result.log_file,
+        ]
+        for result in skipped_results
+    ]
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+
+    def render_row(values: list[str]) -> str:
+        return " | ".join(value.ljust(widths[index]) for index, value in enumerate(values))
+
+    separator = "-+-".join("-" * width for width in widths)
+    return "\n".join([render_row(headers), separator, *(render_row(row) for row in rows)])
+
+
 def status_symbol(status: str) -> str:
     if status == STATUS_SKIPPED:
         return "SKIP"
+    if status == STATUS_CANCELLED:
+        return "ABORT"
+    if status == STATUS_TIMED_OUT:
+        return "TIMEOUT"
+    if status == STATUS_ACTION_REQUIRED:
+        return "ACTION"
+    if status == STATUS_NEUTRAL:
+        return "NEUTRAL"
+    if status == STATUS_STARTUP_FAILURE:
+        return "STARTUP"
     return "✅" if status in {STATUS_PASSED, "PASSED"} else "❌"
 
 
@@ -3391,12 +3524,12 @@ def render_workflow_page(result: WorkflowResult, outputs_dir: Path) -> None:
 
 def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[WorkflowResult]) -> None:
     status_class = "passed" if summary["conclusion"] == "success" else "failed"
-    sorted_results = sorted(results, key=lambda item: (item.status == STATUS_PASSED, -item.failed_tests, -item.duration_seconds))
+    sorted_results = sorted(dispatchable_results(results), key=lambda item: (item.status == STATUS_PASSED, -item.failed_tests, -item.duration_seconds))
 
     rows = []
     for result in sorted_results:
         page_path = Path(result.output_dir) / "index.html"
-        badge_class = "passed" if result.status in {STATUS_PASSED, STATUS_SKIPPED} else "failed"
+        badge_class = "passed" if result.status in {STATUS_PASSED, STATUS_SKIPPED, STATUS_NEUTRAL} else "failed"
         rows.append(
             f"""
             <tr>
@@ -3411,6 +3544,39 @@ def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[W
             </tr>
             """
         )
+    non_dispatchable_rows = []
+    for result in sorted((result for result in results if is_non_dispatchable_workflow_result(result)), key=lambda item: (item.type, item.repository, item.workflow)):
+        page_path = Path(result.output_dir) / "index.html"
+        non_dispatchable_rows.append(
+            f"""
+            <tr>
+              <td><a href="{html_escape(relative_href(outputs_dir / "index.html", page_path))}">{html_escape(result.type + "/" + result.repository)}</a></td>
+              <td>{html_escape(Path(result.workflow).stem)}</td>
+              <td>missing workflow_dispatch</td>
+              <td>{html_escape(result.log_file)}</td>
+            </tr>
+            """
+        )
+    non_dispatchable_section = ""
+    if non_dispatchable_rows:
+        non_dispatchable_section = f"""
+    <div class="panel">
+      <h2>Skipped Workflows Without workflow_dispatch</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Repository</th>
+            <th>Workflow</th>
+            <th>Reason</th>
+            <th>Log</th>
+          </tr>
+        </thead>
+        <tbody>
+{''.join(non_dispatchable_rows)}
+        </tbody>
+      </table>
+    </div>
+        """
 
     content = read_template("dashboard.html").substitute(
         style_css=read_template_text("dashboard.css"),
@@ -3424,6 +3590,7 @@ def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[W
         skipped_tests=html_escape(summary["skipped_tests"]),
         generated_at_utc=html_escape(utc_now()),
         project_rows="".join(rows),
+        non_dispatchable_section=non_dispatchable_section,
     )
     write_text(outputs_dir / "index.html", content)
 
@@ -3583,7 +3750,12 @@ def main() -> int:
 
     log_progress("")
     log_progress("Test Orchestration Summary")
-    log_progress(render_summary_table(all_results))
+    log_progress(render_summary_table(dispatchable_results(all_results)))
+    non_dispatchable_table = render_non_dispatchable_workflow_table(all_results)
+    if non_dispatchable_table:
+        log_progress("")
+        log_progress("Skipped Workflows Without workflow_dispatch")
+        log_progress(non_dispatchable_table)
     log_progress("")
     log_progress(
         "Overall: "
