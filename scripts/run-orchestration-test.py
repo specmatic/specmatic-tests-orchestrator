@@ -1525,38 +1525,19 @@ def parse_reusable_workflow_calls(lines: list[str]) -> list[ReusableWorkflowCall
     return calls
 
 
-def workflow_contains_runnable_test_commands(lines: list[str], workflow_label: str) -> bool:
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        stripped = line.strip()
-        if not stripped.startswith("run:"):
-            index += 1
-            continue
-
-        raw_value = stripped[4:].strip()
-        if raw_value in {"|", "|-", "|+", ">", ">-", ">+"}:
-            block_indent = len(line) - len(line.lstrip(" ")) + 2
-            run_block, index = collect_yaml_block(lines, index + 1, block_indent)
-            for command in split_logical_commands(run_block):
-                normalized = normalize_shellish_command(command)
-                if normalized and is_runnable_workflow_command(normalized, workflow_label):
-                    return True
-            continue
-
-        normalized = normalize_shellish_command(strip_yaml_value(raw_value))
-        if normalized and is_runnable_workflow_command(normalized, workflow_label):
-            return True
-        index += 1
-
-    return False
-
-
 def should_consider_workflow_for_execution_text(text: str, workflow_label: str) -> bool:
     lines = text.splitlines()
     if is_reusable_only_workflow_text(text):
         return False
-    if workflow_contains_runnable_test_commands(lines, workflow_label):
+    synthetic_repo_dir = Path.cwd()
+    synthetic_workflow_file = synthetic_repo_dir / workflow_label
+    commands = extract_workflow_commands_from_lines(
+        workflow_file=synthetic_workflow_file,
+        repo_dir=synthetic_repo_dir,
+        lines=lines,
+        input_values={},
+    )
+    if commands:
         return True
     return bool(parse_reusable_workflow_calls(lines))
 
