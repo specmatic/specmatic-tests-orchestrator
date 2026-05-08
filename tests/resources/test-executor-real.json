@@ -1,8 +1,8 @@
 [
   {
     "type": "sample-project",
-    "description": "AsyncAPI-style checks for the jar",
-    "github-url": "https://github.com/specmatic/specmatic-kafka-sample-asyncapi3.git",
+    "description": "Contract-style checks for the jar",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-java.git",
     "branch": "main",
     "enterprise-version": "${ENTERPRISE_VERSION}"
   },
