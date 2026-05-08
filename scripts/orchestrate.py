@@ -134,13 +134,27 @@ def validate_jar(jar_path: Path) -> None:
             raise ValueError(f"Invalid jar file (no entries found): {jar_path}")
 
 
+def normalize_repo_name(repo_url: str) -> str:
+    if not repo_url:
+        return ""
+    parsed = urlparse(repo_url)
+    path = parsed.path.rstrip("/")
+    name = Path(path).name if path else repo_url.rstrip("/").split("/")[-1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    return name
+
+
+def source_name(source: dict[str, Any], index: int) -> str:
+    name = normalize_repo_name(str(source.get("github-url") or source.get("githubUrl") or ""))
+    if not name:
+        raise ValueError(f"Test executor entry {index + 1} is missing github-url")
+    return name
+
+
 def load_sample_executors(config_path: Path) -> list[dict[str, Any]]:
     if not config_path.exists():
-        return [
-            {"type": "sample-project", "name": "contract-tests", "description": "Contract checks"},
-            {"type": "sample-project", "name": "asyncapi-tests", "description": "AsyncAPI checks"},
-            {"type": "playwright", "name": "ui-tests", "description": "UI checks"},
-        ]
+        raise FileNotFoundError(f"Test executor manifest not found: {config_path}")
 
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, list):
@@ -175,7 +189,7 @@ def normalize_result(source: dict[str, Any], index: int, jar_url: str, jar_path:
     delay_sec = _to_float(result.get("delay_sec"), 0.0)
 
     return {
-        "source": str(source.get("name") or f"source-{index + 1}"),
+        "source": source_name(source, index),
         "type": str(source.get("type", "sample-project")),
         "passed": passed,
         "total": total,
@@ -195,8 +209,8 @@ def create_demo_source_results(outputs_dir: Path, jar_url: str, jar_path: str, c
 
     for index, source in enumerate(sources):
         source_type = str(source.get("type", "sample-project"))
-        source_name = str(source.get("name") or f"source-{index + 1}")
-        source_dir = outputs_dir / f"{source_type}-{source_name}"
+        resolved_source_name = source_name(source, index)
+        source_dir = outputs_dir / f"{source_type}-{resolved_source_name}"
         source_dir.mkdir(parents=True, exist_ok=True)
         payload = normalize_result(source, index, jar_url, jar_path)
         if payload["delay_sec"] > 0:

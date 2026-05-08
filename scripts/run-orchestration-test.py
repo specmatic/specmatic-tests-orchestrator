@@ -530,7 +530,7 @@ def expand_env_placeholders(value: str) -> str:
 
 def normalize_executor(raw: dict[str, Any], index: int) -> TestExecutor:
     repo_url = expand_env_placeholders(str(raw.get("github-url") or raw.get("githubUrl") or raw.get("repoUrl") or raw.get("repo_url") or ""))
-    repo_name = str(raw.get("name") or normalize_repo_name(repo_url) or f"repo-{index + 1}")
+    repo_name = normalize_repo_name(repo_url)
     workflow_files = raw.get("workflow-files") or raw.get("workflowFiles") or raw.get("workflows") or []
     workflow_globs = raw.get("workflow-globs") or raw.get("workflowGlobs") or DEFAULT_WORKFLOW_GLOBS
     result_paths = raw.get("result-paths") or raw.get("resultPaths") or DEFAULT_RESULT_PATHS
@@ -570,7 +570,7 @@ def load_executors(config_path: Path) -> list[TestExecutor]:
     if isinstance(raw, dict) and any(key in raw for key in ["executors", "tests", "repositories"]):
         raw_items = raw.get("executors") or raw.get("tests") or raw.get("repositories") or []
     elif isinstance(raw, dict):
-        raw_items = [{"name": name, **value} for name, value in raw.items() if isinstance(value, dict)]
+        raw_items = [value for value in raw.values() if isinstance(value, dict)]
     else:
         raw_items = raw
 

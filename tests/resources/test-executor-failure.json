@@ -1,41 +1,41 @@
 [
   {
     "type": "sample-project",
-    "name": "contract-tests",
     "description": "Contract-style checks for the jar",
+    "github-url": "https://github.com/specmatic/contract-tests.git",
     "result": {
       "kind": "happy-path",
       "passed": true,
       "total": 12,
       "passed_count": 12,
       "failed_count": 0,
-      "delay_sec": 5
+      "delay_sec": 0.03
     }
   },
   {
     "type": "sample-project",
-    "name": "asyncapi-tests",
     "description": "AsyncAPI-style checks for the jar",
+    "github-url": "https://github.com/specmatic/asyncapi-tests.git",
     "result": {
       "kind": "mixed",
       "passed": false,
       "total": 8,
       "passed_count": 6,
       "failed_count": 2,
-      "delay_sec": 15
+      "delay_sec": 0.11
     }
   },
   {
     "type": "playwright",
-    "name": "ui-tests",
     "description": "UI smoke checks for the jar",
+    "github-url": "https://github.com/specmatic/ui-tests.git",
     "result": {
       "kind": "smoke",
       "passed": true,
       "total": 5,
       "passed_count": 5,
       "failed_count": 0,
-      "delay_sec": 25
+      "delay_sec": 0.17
     }
   }
 ]

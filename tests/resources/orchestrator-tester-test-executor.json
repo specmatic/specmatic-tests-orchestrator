@@ -1,8 +1,8 @@
 [
   {
     "type": "sample-project",
-    "name": "contract-tests",
     "description": "Synthetic contract checks for the orchestrator-tester flow",
+    "github-url": "https://github.com/specmatic/contract-tests.git",
     "result": {
       "kind": "happy-path",
       "passed": true,
@@ -14,8 +14,8 @@
   },
   {
     "type": "sample-project",
-    "name": "asyncapi-tests",
     "description": "Synthetic AsyncAPI checks for the orchestrator-tester flow",
+    "github-url": "https://github.com/specmatic/asyncapi-tests.git",
     "result": {
       "kind": "mixed",
       "passed": true,
@@ -27,8 +27,8 @@
   },
   {
     "type": "playwright",
-    "name": "ui-tests",
     "description": "Synthetic UI smoke checks for the orchestrator-tester flow",
+    "github-url": "https://github.com/specmatic/ui-tests.git",
     "result": {
       "kind": "smoke",
       "passed": true,
