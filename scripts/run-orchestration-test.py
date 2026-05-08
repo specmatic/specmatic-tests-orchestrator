@@ -1246,14 +1246,12 @@ def workflow_result_from_github_run(
         )
         for artifact_path in artifact_paths:
             artifact_total, artifact_failed, artifact_skipped, report_format = collect_test_counts_under(artifact_path)
-            total_tests += artifact_total
-            failed_tests += artifact_failed
-            skipped_tests += artifact_skipped
             append_log(
                 log_file,
                 f"Artifact report counts ({report_format}): tests={artifact_total}, failed={artifact_failed}, skipped={artifact_skipped}",
             )
         if artifact_paths:
+            total_tests, failed_tests, skipped_tests, _report_format = collect_test_counts_across_roots(artifact_paths)
             append_log(
                 log_file,
                 f"Artifact total counts: tests={total_tests}, failed={failed_tests}, skipped={skipped_tests}",
@@ -2410,6 +2408,23 @@ def collect_junit_counts_under(root_dir: Path) -> tuple[int, int, int]:
     return total, failed, skipped
 
 
+def collect_junit_counts_from_files(xml_files: list[Path]) -> tuple[int, int, int]:
+    total = 0
+    failed = 0
+    skipped = 0
+    seen: set[Path] = set()
+    for xml_file in xml_files:
+        resolved = xml_file.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        file_total, file_failed, file_skipped = collect_junit_counts_from_xml(xml_file)
+        total += file_total
+        failed += file_failed
+        skipped += file_skipped
+    return total, failed, skipped
+
+
 def parse_playwright_json_summary(report_file: Path) -> tuple[int, int, int]:
     try:
         payload = json.loads(report_file.read_text(encoding="utf-8"))
@@ -2427,14 +2442,64 @@ def parse_playwright_json_summary(report_file: Path) -> tuple[int, int, int]:
 
 
 def collect_ctrf_counts_under(root_dir: Path) -> tuple[int, int, int]:
+    return collect_ctrf_counts_from_files(sorted(root_dir.rglob("*.json")))
+
+
+def ctrf_test_identity(test: dict[str, Any], fallback_index: int) -> str:
+    test_id = str(test.get("id") or "").strip()
+    if test_id:
+        return test_id
+    suite = str(test.get("suite") or "").strip()
+    name = str(test.get("name") or "").strip()
+    return f"{suite}::{name}::{fallback_index}"
+
+
+def ctrf_status_priority(status: str) -> int:
+    normalized = status.strip().lower()
+    if normalized in {"failed", "failure", "broken", "error"}:
+        return 3
+    if normalized in {"skipped", "pending", "other"}:
+        return 2
+    return 1
+
+
+def collect_ctrf_counts_from_files(json_files: list[Path]) -> tuple[int, int, int]:
     total = 0
     failed = 0
     skipped = 0
-    for json_file in sorted(root_dir.rglob("*.json")):
+    unique_status_by_test: dict[str, str] = {}
+    saw_detailed_tests = False
+
+    for json_file in sorted(json_files):
+        try:
+            payload = json.loads(json_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        results = payload.get("results", {})
+        tests = results.get("tests", [])
+        if isinstance(tests, list) and tests:
+            saw_detailed_tests = True
+            for index, test in enumerate(tests):
+                if not isinstance(test, dict):
+                    continue
+                identity = ctrf_test_identity(test, index)
+                status = str(test.get("status") or "").strip().lower() or "passed"
+                existing = unique_status_by_test.get(identity, "")
+                if ctrf_status_priority(status) >= ctrf_status_priority(existing):
+                    unique_status_by_test[identity] = status
+            continue
+
         file_total, _passed, file_failed, file_skipped = parse_ctrf_summary(json_file)
         total += file_total
         failed += file_failed
         skipped += file_skipped
+
+    if saw_detailed_tests:
+        total += len(unique_status_by_test)
+        failed += sum(1 for status in unique_status_by_test.values() if ctrf_status_priority(status) == 3)
+        skipped += sum(1 for status in unique_status_by_test.values() if ctrf_status_priority(status) == 2)
+
     return total, failed, skipped
 
 
@@ -2443,6 +2508,18 @@ def collect_playwright_json_counts_under(root_dir: Path) -> tuple[int, int, int]
     failed = 0
     skipped = 0
     for json_file in sorted(root_dir.rglob("*.json")):
+        file_total, file_failed, file_skipped = parse_playwright_json_summary(json_file)
+        total += file_total
+        failed += file_failed
+        skipped += file_skipped
+    return total, failed, skipped
+
+
+def collect_playwright_json_counts_from_files(json_files: list[Path]) -> tuple[int, int, int]:
+    total = 0
+    failed = 0
+    skipped = 0
+    for json_file in sorted(json_files):
         file_total, file_failed, file_skipped = parse_playwright_json_summary(json_file)
         total += file_total
         failed += file_failed
@@ -2460,6 +2537,43 @@ def collect_test_counts_under(root_dir: Path) -> tuple[int, int, int, str]:
         return ctrf_total, ctrf_failed, ctrf_skipped, "ctrf"
 
     playwright_total, playwright_failed, playwright_skipped = collect_playwright_json_counts_under(root_dir)
+    if playwright_total:
+        return playwright_total, playwright_failed, playwright_skipped, "playwright-json"
+
+    return 0, 0, 0, "none"
+
+
+def collect_test_counts_across_roots(root_dirs: list[Path]) -> tuple[int, int, int, str]:
+    xml_files: list[Path] = []
+    json_files: list[Path] = []
+    seen_xml: set[Path] = set()
+    seen_json: set[Path] = set()
+
+    for root_dir in root_dirs:
+        if not root_dir.exists():
+            continue
+        for xml_file in root_dir.rglob("*.xml"):
+            resolved = xml_file.resolve()
+            if resolved in seen_xml:
+                continue
+            seen_xml.add(resolved)
+            xml_files.append(xml_file)
+        for json_file in root_dir.rglob("*.json"):
+            resolved = json_file.resolve()
+            if resolved in seen_json:
+                continue
+            seen_json.add(resolved)
+            json_files.append(json_file)
+
+    junit_total, junit_failed, junit_skipped = collect_junit_counts_from_files(xml_files)
+    if junit_total:
+        return junit_total, junit_failed, junit_skipped, "junit"
+
+    ctrf_total, ctrf_failed, ctrf_skipped = collect_ctrf_counts_from_files(json_files)
+    if ctrf_total:
+        return ctrf_total, ctrf_failed, ctrf_skipped, "ctrf"
+
+    playwright_total, playwright_failed, playwright_skipped = collect_playwright_json_counts_from_files(json_files)
     if playwright_total:
         return playwright_total, playwright_failed, playwright_skipped, "playwright-json"
 

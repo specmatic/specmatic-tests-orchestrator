@@ -1984,6 +1984,107 @@ jobs:
             self.assertEqual(result.skipped_tests, 1)
             self.assertTrue(result.copied_result_paths)
 
+    def test_workflow_result_from_github_run_dedupes_ctrf_counts_across_artifacts(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            executor = run_orchestration_test.TestExecutor(
+                type="sample-project",
+                github_url="https://github.com/specmatic/specmatic-order-bff-java.git",
+                name="contract-tests",
+                branch="main",
+                description="",
+                workflow_globs=[],
+                workflow_files=[],
+                command=[],
+                result_paths=[],
+            )
+
+            def build_ctrf_archive(report_name: str) -> bytes:
+                archive_buffer = io.BytesIO()
+                with zipfile.ZipFile(archive_buffer, "w") as archive:
+                    archive.writestr(
+                        f"{report_name}/ctrf-report.json",
+                        json.dumps(
+                            {
+                                "results": {
+                                    "summary": {
+                                        "tests": 2,
+                                        "passed": 1,
+                                        "failed": 1,
+                                        "skipped": 0,
+                                    },
+                                    "tests": [
+                                        {"id": "test-1", "name": "Contract 1", "status": "passed"},
+                                        {"id": "test-2", "name": "Contract 2", "status": "failed"},
+                                    ],
+                                }
+                            }
+                        ),
+                    )
+                return archive_buffer.getvalue()
+
+            archives = {
+                "ctrf-report-docker": build_ctrf_archive("ctrf-report-docker"),
+                "ctrf-report-cli": build_ctrf_archive("ctrf-report-cli"),
+                "ctrf-report-junit": build_ctrf_archive("ctrf-report-junit"),
+            }
+
+            def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+                self.assertIn("/actions/runs/123/artifacts", url)
+                return {
+                    "artifacts": [
+                        {
+                            "id": 1,
+                            "name": "ctrf-report-docker",
+                            "archive_download_url": "https://api.example/artifacts/1/zip",
+                            "expired": False,
+                        },
+                        {
+                            "id": 2,
+                            "name": "ctrf-report-cli",
+                            "archive_download_url": "https://api.example/artifacts/2/zip",
+                            "expired": False,
+                        },
+                        {
+                            "id": 3,
+                            "name": "ctrf-report-junit",
+                            "archive_download_url": "https://api.example/artifacts/3/zip",
+                            "expired": False,
+                        },
+                    ]
+                }
+
+            def fake_download(url: str, token: str) -> bytes:
+                archive_id = url.rstrip("/").rsplit("/", 2)[-2]
+                mapping = {
+                    "1": archives["ctrf-report-docker"],
+                    "2": archives["ctrf-report-cli"],
+                    "3": archives["ctrf-report-junit"],
+                }
+                return mapping[archive_id]
+
+            with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
+                mock.patch.object(run_orchestration_test, "download_github_artifact_bytes", side_effect=fake_download):
+                result = run_orchestration_test.workflow_result_from_github_run(
+                    executor=executor,
+                    outputs_dir=temp_dir / "outputs",
+                    repo_slug="specmatic/specmatic-order-bff-java",
+                    workflow_label=".github/workflows/gradle.yml",
+                    run={
+                        "id": 123,
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "html_url": "https://example.com/run/123",
+                    },
+                    started_at="2026-05-08T00:00:00Z",
+                    elapsed_seconds=5,
+                    github_token="token",
+                    api_base_url="https://api.github.com",
+                )
+
+            self.assertEqual(result.total_tests, 2)
+            self.assertEqual(result.failed_tests, 1)
+            self.assertEqual(result.skipped_tests, 0)
+
     def test_download_github_artifact_bytes_follows_redirect_without_auth_header(self) -> None:
         archive_bytes = b"zip-bytes"
 
