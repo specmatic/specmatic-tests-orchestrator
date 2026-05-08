@@ -211,6 +211,12 @@ class RemoteWorkflowFile:
     text: str
 
 
+@dataclass(frozen=True)
+class ParallelWorkflowSelection:
+    dispatchable: list[RemoteWorkflowFile]
+    non_dispatchable: list[RemoteWorkflowFile]
+
+
 def parse_env_line(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"):
@@ -3092,6 +3098,28 @@ def run_parallel_executor(
     jar_url: str = "",
     jar_path: str = "",
 ) -> list[WorkflowResult]:
+    setup_results, dispatched = dispatch_parallel_executor_workflows(
+        executor=executor,
+        outputs_dir=outputs_dir,
+        github_token=github_token,
+        api_base_url=api_base_url,
+        specmatic_version=specmatic_version,
+        enterprise_version=enterprise_version,
+        enterprise_docker_image=enterprise_docker_image,
+        jar_url=jar_url,
+        jar_path=jar_path,
+    )
+    return setup_results + wait_for_parallel_workflows(
+        dispatched=dispatched,
+        outputs_dir=outputs_dir,
+        github_token=github_token,
+        api_base_url=api_base_url,
+        poll_seconds=poll_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def parallel_executor_setup_result(executor: TestExecutor, outputs_dir: Path) -> list[WorkflowResult] | None:
     if should_skip_playwright_executor(executor):
         details = (
             "skipped Playwright executor on windows enterprise configuration; "
@@ -3120,7 +3148,17 @@ def run_parallel_executor(
     if not repo_slug:
         return [synthetic_result(executor, outputs_dir, "_setup", STATUS_MISSING_REPO_URL, "could not determine GitHub repository", 1)]
 
-    ref = executor.branch or "main"
+    return None
+
+
+def discover_parallel_workflow_selection(
+    executor: TestExecutor,
+    outputs_dir: Path,
+    repo_slug: str,
+    ref: str,
+    github_token: str,
+    api_base_url: str,
+) -> tuple[list[WorkflowResult], ParallelWorkflowSelection | None]:
     log_progress(f"    discovering workflows via GitHub API in {repo_slug} on {ref}")
     try:
         discovered_workflow_files = discover_remote_workflow_files(
@@ -3140,7 +3178,7 @@ def run_parallel_executor(
                 f"could not discover GitHub workflows via API for {repo_slug}: {exc}",
                 1,
             )
-        ]
+        ], None
 
     candidate_workflow_files = [
         workflow_file
@@ -3164,13 +3202,23 @@ def run_parallel_executor(
             f"{'s' if len(non_dispatchable_workflow_files) != 1 else ''} without workflow_dispatch"
         )
     if not workflow_files and not non_dispatchable_workflow_files:
-        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
+        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)], None
 
-    dispatched: list[ParallelWorkflowRun] = []
-    dispatch_errors: list[WorkflowResult] = []
-    for workflow_file in non_dispatchable_workflow_files:
+    return [], ParallelWorkflowSelection(
+        dispatchable=workflow_files,
+        non_dispatchable=non_dispatchable_workflow_files,
+    )
+
+
+def non_dispatchable_workflow_results(
+    executor: TestExecutor,
+    outputs_dir: Path,
+    workflow_files: list[RemoteWorkflowFile],
+) -> list[WorkflowResult]:
+    results: list[WorkflowResult] = []
+    for workflow_file in workflow_files:
         workflow_label = workflow_file.label
-        dispatch_errors.append(
+        results.append(
             synthetic_result(
                 executor,
                 outputs_dir,
@@ -3183,73 +3231,147 @@ def run_parallel_executor(
                 1,
             )
         )
+    return results
+
+
+def dispatch_inputs_for_remote_workflow(
+    executor: TestExecutor,
+    workflow_file: RemoteWorkflowFile,
+    specmatic_version: str,
+    enterprise_version: str,
+    enterprise_docker_image: str,
+    jar_url: str,
+    jar_path: str,
+) -> dict[str, str]:
+    available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
+    additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
+    orchestrator_disable_visual = additional_env_map.get(
+        "ORCHESTRATOR_DISABLE_VISUAL",
+        os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true"),
+    )
+    return workflow_dispatch_inputs_for(
+        available_inputs=available_inputs,
+        specmatic_version=specmatic_version,
+        enterprise_version=enterprise_version,
+        enterprise_docker_image=enterprise_docker_image,
+        jar_url=jar_url,
+        jar_path=jar_path,
+        orchestrator_disable_visual=orchestrator_disable_visual,
+    )
+
+
+def dispatch_remote_workflow(
+    executor: TestExecutor,
+    outputs_dir: Path,
+    repo_slug: str,
+    ref: str,
+    workflow_file: RemoteWorkflowFile,
+    workflow_index: int,
+    workflow_count: int,
+    github_token: str,
+    api_base_url: str,
+    specmatic_version: str,
+    enterprise_version: str,
+    enterprise_docker_image: str,
+    jar_url: str,
+    jar_path: str,
+) -> tuple[WorkflowResult | None, ParallelWorkflowRun | None]:
+    workflow_label = workflow_file.label
+    inputs = dispatch_inputs_for_remote_workflow(
+        executor=executor,
+        workflow_file=workflow_file,
+        specmatic_version=specmatic_version,
+        enterprise_version=enterprise_version,
+        enterprise_docker_image=enterprise_docker_image,
+        jar_url=jar_url,
+        jar_path=jar_path,
+    )
+    started_at = utc_now()
+    dispatched_after = datetime.now(timezone.utc)
+    log_progress(
+        f"  -> dispatching workflow {workflow_index}/{workflow_count}: {workflow_label} in {repo_slug} on {ref}"
+    )
+    if inputs:
+        log_progress(
+            "     dispatch inputs: "
+            + ", ".join(f"{key}={value}" for key, value in sorted(inputs.items()))
+        )
+    else:
+        log_progress("     dispatch inputs: none")
+
+    try:
+        dispatch_github_workflow(
+            repo_slug=repo_slug,
+            workflow_label=workflow_label,
+            ref=ref,
+            inputs=inputs,
+            token=github_token,
+            api_base_url=api_base_url,
+        )
+    except Exception as exc:
+        return synthetic_result(
+            executor,
+            outputs_dir,
+            Path(workflow_label).stem,
+            STATUS_SETUP_FAILED,
+            f"workflow_dispatch failed for {workflow_label}: {exc}",
+            1,
+        ), None
+
+    orchestrator_run_suffix = inputs.get("orchestrator_run_suffix") or ""
+    return None, ParallelWorkflowRun(
+        workflow_label=workflow_label,
+        started_at=started_at,
+        dispatched_after=dispatched_after,
+        ref=ref,
+        dispatch_started_monotonic=time.time(),
+        executor=executor,
+        repo_slug=repo_slug,
+        expected_run_title_fragment=orchestrator_run_suffix,
+    )
+
+
+def dispatch_remote_workflows(
+    executor: TestExecutor,
+    outputs_dir: Path,
+    repo_slug: str,
+    ref: str,
+    workflow_files: list[RemoteWorkflowFile],
+    github_token: str,
+    api_base_url: str,
+    specmatic_version: str,
+    enterprise_version: str,
+    enterprise_docker_image: str,
+    jar_url: str,
+    jar_path: str,
+) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
     if workflow_files:
         log_progress(f"    preparing workflow_dispatch requests for {len(workflow_files)} workflow(s)")
+
+    dispatch_errors: list[WorkflowResult] = []
+    dispatched: list[ParallelWorkflowRun] = []
     for index, workflow_file in enumerate(workflow_files, start=1):
-        workflow_label = workflow_file.label
-        available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
-        additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
-        orchestrator_disable_visual = additional_env_map.get(
-            "ORCHESTRATOR_DISABLE_VISUAL",
-            os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true"),
-        )
-        inputs = workflow_dispatch_inputs_for(
-            available_inputs=available_inputs,
+        error_result, run = dispatch_remote_workflow(
+            executor=executor,
+            outputs_dir=outputs_dir,
+            repo_slug=repo_slug,
+            ref=ref,
+            workflow_file=workflow_file,
+            workflow_index=index,
+            workflow_count=len(workflow_files),
+            github_token=github_token,
+            api_base_url=api_base_url,
             specmatic_version=specmatic_version,
             enterprise_version=enterprise_version,
             enterprise_docker_image=enterprise_docker_image,
             jar_url=jar_url,
             jar_path=jar_path,
-            orchestrator_disable_visual=orchestrator_disable_visual,
-            
         )
-        started_at = utc_now()
-        dispatched_after = datetime.now(timezone.utc)
-        log_progress(
-            f"  -> dispatching workflow {index}/{len(workflow_files)}: {workflow_label} in {repo_slug} on {ref}"
-        )
-        if inputs:
-            log_progress(
-                "     dispatch inputs: "
-                + ", ".join(f"{key}={value}" for key, value in sorted(inputs.items()))
-            )
-        else:
-            log_progress("     dispatch inputs: none")
-        try:
-            dispatch_github_workflow(
-                repo_slug=repo_slug,
-                workflow_label=workflow_label,
-                ref=ref,
-                inputs=inputs,
-                token=github_token,
-                api_base_url=api_base_url,
-            )
-            orchestrator_run_suffix = inputs.get("orchestrator_run_suffix") or ""
-            dispatched.append(
-                ParallelWorkflowRun(
-                    workflow_label=workflow_label,
-                    started_at=started_at,
-                    dispatched_after=dispatched_after,
-                    ref=ref,
-                    dispatch_started_monotonic=time.time(),
-                    executor=executor,
-                    repo_slug=repo_slug,
-                    expected_run_title_fragment=orchestrator_run_suffix,
-                )
-            )
-        except Exception as exc:
-            dispatch_errors.append(
-                synthetic_result(
-                    executor,
-                    outputs_dir,
-                    Path(workflow_label).stem,
-                    STATUS_SETUP_FAILED,
-                    f"workflow_dispatch failed for {workflow_label}: {exc}",
-                    1,
-                )
-            )
+        if error_result is not None:
+            dispatch_errors.append(error_result)
+        if run is not None:
+            dispatched.append(run)
 
-    results: list[WorkflowResult] = list(dispatch_errors)
     if dispatched:
         if len(dispatched) == len(workflow_files):
             log_progress(f"    Dispatched successfully: {len(dispatched)}/{len(workflow_files)} workflows")
@@ -3257,107 +3379,113 @@ def run_parallel_executor(
             log_progress(
                 f"    Dispatch completed: {len(dispatched)}/{len(workflow_files)} workflows dispatched successfully"
             )
+    return dispatch_errors, dispatched
 
-        last_progress_log_time = 0.0
-        logged_initial_progress = False
-        rendered_progress_snapshot_count = 0
-        while True:
-            now = time.time()
-            all_finished = True
-            for item in dispatched:
-                if item.completed_run is not None or item.error_message:
-                    continue
 
-                elapsed_seconds = int(now - item.dispatch_started_monotonic)
-                if elapsed_seconds >= timeout_seconds:
-                    item.error_message = (
-                        f"workflow_dispatch polling failed for {item.workflow_label}: "
-                        f"timed out after {timeout_seconds}s"
-                    )
-                    continue
+def update_parallel_workflow_run(
+    item: ParallelWorkflowRun,
+    now: float,
+    github_token: str,
+    api_base_url: str,
+    timeout_seconds: int,
+) -> bool:
+    if item.completed_run is not None or item.error_message:
+        return True
 
-                all_finished = False
-                try:
-                    if item.run_id is None:
-                        run = find_dispatched_workflow_run_once(
-                            repo_slug=repo_slug,
-                            workflow_label=item.workflow_label,
-                            branch=item.ref,
-                            dispatched_after=item.dispatched_after,
-                            token=github_token,
-                            api_base_url=api_base_url,
-                            expected_run_title_fragment=item.expected_run_title_fragment,
-                        )
-                        if run is None:
-                            continue
-                        item.run_id = int(run["id"])
-                        item.html_url = str(run.get("html_url") or "")
-                        item.github_status = str(run.get("status") or "queued")
-                        item.conclusion = str(run.get("conclusion") or "")
-                        if item.github_status == "completed":
-                            item.completed_run = run
-                        continue
+    elapsed_seconds = int(now - item.dispatch_started_monotonic)
+    if elapsed_seconds >= timeout_seconds:
+        item.error_message = (
+            f"workflow_dispatch polling failed for {item.workflow_label}: "
+            f"timed out after {timeout_seconds}s"
+        )
+        return True
 
-                    run = github_api_json(
-                        "GET",
-                        f"{api_base_url}/repos/{repo_slug}/actions/runs/{item.run_id}",
-                        github_token,
-                    )
-                    item.html_url = str(run.get("html_url") or item.html_url)
-                    item.github_status = str(run.get("status") or "unknown")
-                    item.conclusion = str(run.get("conclusion") or "")
-                    if item.github_status == "completed":
-                        item.completed_run = run
-                except Exception as exc:
-                    item.error_message = f"workflow_dispatch polling failed for {item.workflow_label}: {exc}"
-
-            should_log_progress = (
-                not logged_initial_progress
-                or now - last_progress_log_time >= PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS
-                or all_finished
+    try:
+        if item.run_id is None:
+            run = find_dispatched_workflow_run_once(
+                repo_slug=item.repo_slug,
+                workflow_label=item.workflow_label,
+                branch=item.ref,
+                dispatched_after=item.dispatched_after,
+                token=github_token,
+                api_base_url=api_base_url,
+                expected_run_title_fragment=item.expected_run_title_fragment,
             )
-            if should_log_progress:
-                rendered_progress_snapshot_count += 1
-                log_progress(render_parallel_progress_table(dispatched, rendered_progress_snapshot_count))
-                last_progress_log_time = now
-                logged_initial_progress = True
+            if run is None:
+                return False
+            item.run_id = int(run["id"])
+            item.html_url = str(run.get("html_url") or "")
+            item.github_status = str(run.get("status") or "queued")
+            item.conclusion = str(run.get("conclusion") or "")
+            if item.github_status == "completed":
+                item.completed_run = run
+            return item.completed_run is not None
 
-            if all_finished:
-                break
-            time.sleep(max(1, poll_seconds))
+        run = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{item.repo_slug}/actions/runs/{item.run_id}",
+            github_token,
+        )
+        item.html_url = str(run.get("html_url") or item.html_url)
+        item.github_status = str(run.get("status") or "unknown")
+        item.conclusion = str(run.get("conclusion") or "")
+        if item.github_status == "completed":
+            item.completed_run = run
+    except Exception as exc:
+        item.error_message = f"workflow_dispatch polling failed for {item.workflow_label}: {exc}"
+        return True
 
-        for item in dispatched:
-            if item.completed_run is not None:
-                result = workflow_result_from_github_run(
-                    executor=executor,
-                    outputs_dir=outputs_dir,
-                    repo_slug=repo_slug,
-                    workflow_label=item.workflow_label,
-                    run=item.completed_run,
-                    started_at=item.started_at,
-                    elapsed_seconds=int(time.time() - item.dispatch_started_monotonic),
-                    github_token=github_token,
-                    api_base_url=api_base_url,
-                )
-                log_progress(
-                    f"     completed {Path(item.workflow_label).stem}: "
-                    f"status={result.status}, time={format_elapsed_time(result.duration_seconds)}, "
-                    f"output={result.output_dir}"
-                )
-                results.append(result)
-                continue
+    return item.completed_run is not None
 
-            results.append(
-                synthetic_result(
-                    executor,
-                    outputs_dir,
-                    Path(item.workflow_label).stem,
-                    STATUS_SETUP_FAILED,
-                    item.error_message or f"workflow_dispatch polling failed for {item.workflow_label}",
-                    1,
-                )
-            )
-    return results
+
+def should_log_parallel_progress(
+    logged_initial_progress: bool,
+    now: float,
+    last_progress_log_time: float,
+    all_finished: bool,
+) -> bool:
+    return (
+        not logged_initial_progress
+        or now - last_progress_log_time >= PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS
+        or all_finished
+    )
+
+
+def parallel_workflow_result(
+    item: ParallelWorkflowRun,
+    outputs_dir: Path,
+    github_token: str,
+    api_base_url: str,
+) -> WorkflowResult | None:
+    if item.executor is None:
+        return None
+    if item.completed_run is not None:
+        result = workflow_result_from_github_run(
+            executor=item.executor,
+            outputs_dir=outputs_dir,
+            repo_slug=item.repo_slug,
+            workflow_label=item.workflow_label,
+            run=item.completed_run,
+            started_at=item.started_at,
+            elapsed_seconds=int(time.time() - item.dispatch_started_monotonic),
+            github_token=github_token,
+            api_base_url=api_base_url,
+        )
+        log_progress(
+            f"     completed {item.repo_slug}/{Path(item.workflow_label).stem}: "
+            f"status={result.status}, time={format_elapsed_time(result.duration_seconds)}, "
+            f"output={result.output_dir}"
+        )
+        return result
+
+    return synthetic_result(
+        item.executor,
+        outputs_dir,
+        Path(item.workflow_label).stem,
+        STATUS_SETUP_FAILED,
+        item.error_message or f"workflow_dispatch polling failed for {item.workflow_label}",
+        1,
+    )
 
 
 def dispatch_parallel_executor_workflows(
@@ -3371,170 +3499,44 @@ def dispatch_parallel_executor_workflows(
     jar_url: str = "",
     jar_path: str = "",
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
-    if should_skip_playwright_executor(executor):
-        details = (
-            "skipped Playwright executor on windows enterprise configuration; "
-            "Playwright workflows are dispatched by the ubuntu enterprise configuration run"
-        )
-        log_progress(f"    {details}")
-        return [synthetic_result(executor, outputs_dir, "_skipped", STATUS_SKIPPED, details, 0)], []
-
-    if executor.result_profile is not None:
-        log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
-        return [profiled_result(executor, outputs_dir)], []
-
-    if executor.command:
-        return [
-            synthetic_result(
-                executor,
-                outputs_dir,
-                "_configured",
-                STATUS_SETUP_FAILED,
-                "parallel mode dispatches GitHub workflow files; configured commands require sequential mode",
-                1,
-            )
-        ], []
+    setup_results = parallel_executor_setup_result(executor, outputs_dir)
+    if setup_results is not None:
+        return setup_results, []
 
     repo_slug = github_repo_slug(executor.github_url)
-    if not repo_slug:
-        return [synthetic_result(executor, outputs_dir, "_setup", STATUS_MISSING_REPO_URL, "could not determine GitHub repository", 1)], []
-
+    assert repo_slug is not None
     ref = executor.branch or "main"
-    log_progress(f"    discovering workflows via GitHub API in {repo_slug} on {ref}")
-    try:
-        discovered_workflow_files = discover_remote_workflow_files(
-            repo_slug=repo_slug,
-            ref=ref,
-            executor=executor,
-            token=github_token,
-            api_base_url=api_base_url,
-        )
-    except Exception as exc:
-        return [
-            synthetic_result(
-                executor,
-                outputs_dir,
-                "_discovery",
-                STATUS_SETUP_FAILED,
-                f"could not discover GitHub workflows via API for {repo_slug}: {exc}",
-                1,
-            )
-        ], []
-
-    candidate_workflow_files = [
-        workflow_file
-        for workflow_file in discovered_workflow_files
-        if should_consider_workflow_for_execution_text(workflow_file.text, workflow_file.label)
-    ]
-    workflow_files = [
-        workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger_in_text(workflow_file.text)
-    ]
-    non_dispatchable_workflow_files = [
-        workflow_file for workflow_file in candidate_workflow_files if not has_workflow_dispatch_trigger_in_text(workflow_file.text)
-    ]
-    log_progress(
-        f"    discovered {len(workflow_files)} dispatchable workflow file"
-        f"{'s' if len(workflow_files) != 1 else ''} in {repo_slug}"
+    discovery_results, workflow_selection = discover_parallel_workflow_selection(
+        executor=executor,
+        outputs_dir=outputs_dir,
+        repo_slug=repo_slug,
+        ref=ref,
+        github_token=github_token,
+        api_base_url=api_base_url,
     )
-    if non_dispatchable_workflow_files:
-        log_progress(
-            "    skipped "
-            f"{len(non_dispatchable_workflow_files)} workflow file"
-            f"{'s' if len(non_dispatchable_workflow_files) != 1 else ''} without workflow_dispatch"
-        )
-    if not workflow_files and not non_dispatchable_workflow_files:
-        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)], []
+    if workflow_selection is None:
+        return discovery_results, []
 
-    dispatched: list[ParallelWorkflowRun] = []
-    dispatch_errors: list[WorkflowResult] = []
-    for workflow_file in non_dispatchable_workflow_files:
-        workflow_label = workflow_file.label
-        dispatch_errors.append(
-            synthetic_result(
-                executor,
-                outputs_dir,
-                Path(workflow_label).stem,
-                STATUS_SETUP_FAILED,
-                (
-                    f"{workflow_label} cannot be dispatched because it does not declare workflow_dispatch. "
-                    "Add an on.workflow_dispatch trigger to this target workflow, or remove it from the parallel manifest."
-                ),
-                1,
-            )
-        )
-    if workflow_files:
-        log_progress(f"    preparing workflow_dispatch requests for {len(workflow_files)} workflow(s)")
-    for index, workflow_file in enumerate(workflow_files, start=1):
-        workflow_label = workflow_file.label
-        available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
-        additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
-        orchestrator_disable_visual = additional_env_map.get(
-            "ORCHESTRATOR_DISABLE_VISUAL",
-            os.environ.get("ORCHESTRATOR_DISABLE_VISUAL", "true"),
-        )
-        inputs = workflow_dispatch_inputs_for(
-            available_inputs=available_inputs,
-            specmatic_version=specmatic_version,
-            enterprise_version=enterprise_version,
-            enterprise_docker_image=enterprise_docker_image,
-            jar_url=jar_url,
-            jar_path=jar_path,
-            orchestrator_disable_visual=orchestrator_disable_visual,
-        )
-        started_at = utc_now()
-        dispatched_after = datetime.now(timezone.utc)
-        log_progress(
-            f"  -> dispatching workflow {index}/{len(workflow_files)}: {workflow_label} in {repo_slug} on {ref}"
-        )
-        if inputs:
-            log_progress(
-                "     dispatch inputs: "
-                + ", ".join(f"{key}={value}" for key, value in sorted(inputs.items()))
-            )
-        else:
-            log_progress("     dispatch inputs: none")
-        try:
-            dispatch_github_workflow(
-                repo_slug=repo_slug,
-                workflow_label=workflow_label,
-                ref=ref,
-                inputs=inputs,
-                token=github_token,
-                api_base_url=api_base_url,
-            )
-            orchestrator_run_suffix = inputs.get("orchestrator_run_suffix") or ""
-            dispatched.append(
-                ParallelWorkflowRun(
-                    workflow_label=workflow_label,
-                    started_at=started_at,
-                    dispatched_after=dispatched_after,
-                    ref=ref,
-                    dispatch_started_monotonic=time.time(),
-                    executor=executor,
-                    repo_slug=repo_slug,
-                    expected_run_title_fragment=orchestrator_run_suffix,
-                )
-            )
-        except Exception as exc:
-            dispatch_errors.append(
-                synthetic_result(
-                    executor,
-                    outputs_dir,
-                    Path(workflow_label).stem,
-                    STATUS_SETUP_FAILED,
-                    f"workflow_dispatch failed for {workflow_label}: {exc}",
-                    1,
-                )
-            )
-
-    if dispatched:
-        if len(dispatched) == len(workflow_files):
-            log_progress(f"    Dispatched successfully: {len(dispatched)}/{len(workflow_files)} workflows")
-        else:
-            log_progress(
-                f"    Dispatch completed: {len(dispatched)}/{len(workflow_files)} workflows dispatched successfully"
-            )
-    return dispatch_errors, dispatched
+    non_dispatchable_results = non_dispatchable_workflow_results(
+        executor,
+        outputs_dir,
+        workflow_selection.non_dispatchable,
+    )
+    dispatch_errors, dispatched = dispatch_remote_workflows(
+        executor=executor,
+        outputs_dir=outputs_dir,
+        repo_slug=repo_slug,
+        ref=ref,
+        workflow_files=workflow_selection.dispatchable,
+        github_token=github_token,
+        api_base_url=api_base_url,
+        specmatic_version=specmatic_version,
+        enterprise_version=enterprise_version,
+        enterprise_docker_image=enterprise_docker_image,
+        jar_url=jar_url,
+        jar_path=jar_path,
+    )
+    return discovery_results + non_dispatchable_results + dispatch_errors, dispatched
 
 
 def wait_for_parallel_workflows(
@@ -3545,9 +3547,8 @@ def wait_for_parallel_workflows(
     poll_seconds: int,
     timeout_seconds: int,
 ) -> list[WorkflowResult]:
-    results: list[WorkflowResult] = []
     if not dispatched:
-        return results
+        return []
 
     log_progress(f"==> Waiting for {len(dispatched)} dispatched workflow(s) across all repositories")
     last_progress_log_time = 0.0
@@ -3555,60 +3556,19 @@ def wait_for_parallel_workflows(
     rendered_progress_snapshot_count = 0
     while True:
         now = time.time()
-        all_finished = True
-        for item in dispatched:
-            if item.completed_run is not None or item.error_message:
-                continue
+        workflow_states = [
+            update_parallel_workflow_run(
+                item,
+                now,
+                github_token,
+                api_base_url,
+                timeout_seconds,
+            )
+            for item in dispatched
+        ]
+        all_finished = all(workflow_states)
 
-            elapsed_seconds = int(now - item.dispatch_started_monotonic)
-            if elapsed_seconds >= timeout_seconds:
-                item.error_message = (
-                    f"workflow_dispatch polling failed for {item.workflow_label}: "
-                    f"timed out after {timeout_seconds}s"
-                )
-                continue
-
-            all_finished = False
-            try:
-                if item.run_id is None:
-                    run = find_dispatched_workflow_run_once(
-                        repo_slug=item.repo_slug,
-                        workflow_label=item.workflow_label,
-                        branch=item.ref,
-                        dispatched_after=item.dispatched_after,
-                        token=github_token,
-                        api_base_url=api_base_url,
-                        expected_run_title_fragment=item.expected_run_title_fragment,
-                    )
-                    if run is None:
-                        continue
-                    item.run_id = int(run["id"])
-                    item.html_url = str(run.get("html_url") or "")
-                    item.github_status = str(run.get("status") or "queued")
-                    item.conclusion = str(run.get("conclusion") or "")
-                    if item.github_status == "completed":
-                        item.completed_run = run
-                    continue
-
-                run = github_api_json(
-                    "GET",
-                    f"{api_base_url}/repos/{item.repo_slug}/actions/runs/{item.run_id}",
-                    github_token,
-                )
-                item.html_url = str(run.get("html_url") or item.html_url)
-                item.github_status = str(run.get("status") or "unknown")
-                item.conclusion = str(run.get("conclusion") or "")
-                if item.github_status == "completed":
-                    item.completed_run = run
-            except Exception as exc:
-                item.error_message = f"workflow_dispatch polling failed for {item.workflow_label}: {exc}"
-
-        should_log_progress = (
-            not logged_initial_progress
-            or now - last_progress_log_time >= PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS
-            or all_finished
-        )
-        if should_log_progress:
+        if should_log_parallel_progress(logged_initial_progress, now, last_progress_log_time, all_finished):
             rendered_progress_snapshot_count += 1
             log_progress(render_parallel_progress_table(dispatched, rendered_progress_snapshot_count))
             last_progress_log_time = now
@@ -3618,40 +3578,11 @@ def wait_for_parallel_workflows(
             break
         time.sleep(max(1, poll_seconds))
 
-    for item in dispatched:
-        if item.executor is None:
-            continue
-        if item.completed_run is not None:
-            result = workflow_result_from_github_run(
-                executor=item.executor,
-                outputs_dir=outputs_dir,
-                repo_slug=item.repo_slug,
-                workflow_label=item.workflow_label,
-                run=item.completed_run,
-                started_at=item.started_at,
-                elapsed_seconds=int(time.time() - item.dispatch_started_monotonic),
-                github_token=github_token,
-                api_base_url=api_base_url,
-            )
-            log_progress(
-                f"     completed {item.repo_slug}/{Path(item.workflow_label).stem}: "
-                f"status={result.status}, time={format_elapsed_time(result.duration_seconds)}, "
-                f"output={result.output_dir}"
-            )
-            results.append(result)
-            continue
-
-        results.append(
-            synthetic_result(
-                item.executor,
-                outputs_dir,
-                Path(item.workflow_label).stem,
-                STATUS_SETUP_FAILED,
-                item.error_message or f"workflow_dispatch polling failed for {item.workflow_label}",
-                1,
-            )
-        )
-    return results
+    return [
+        result
+        for item in dispatched
+        if (result := parallel_workflow_result(item, outputs_dir, github_token, api_base_url)) is not None
+    ]
 
 
 def build_summary(results: list[WorkflowResult]) -> dict[str, Any]:
