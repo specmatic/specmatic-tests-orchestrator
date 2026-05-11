@@ -7,6 +7,20 @@
     "enterprise-version": "${ENTERPRISE_VERSION}"
   },
   {
+    "type": "sample-project",
+    "description": "Contract test for Async sample project",
+    "github-url": "https://github.com/specmatic/specmatic-async-sample.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for GraphQL sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-graphql-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
     "type": "playwright-tests",
     "description": "UI tests for Studio",
     "github-url": "https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
