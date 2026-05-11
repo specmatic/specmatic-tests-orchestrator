@@ -221,6 +221,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertIn("| Total workflows | 2 |", step_summary)
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
+                self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", step_summary)
                 self.assertIn(
                     "| sample-project/contract-tests | gradle.yml | ❌ failed | 118s | 227 | 5 | 4 | http://example.local/workflows/gradle |",
                     step_summary,
@@ -261,13 +262,14 @@ class BridgeCallbackTest(unittest.TestCase):
         markdown = __import__("scripts.bridge_to_enterprise", fromlist=["summary_markdown"]).summary_markdown(
             summary,
             "failure",
-            "http://example.local/orchestrator/run/1",
+            "http://example.local/enterprise/run/101",
         )
 
         self.assertIn("| Total workflows | 1 |", markdown)
         self.assertIn("| Failed workflows | 1 |", markdown)
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
+        self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
         self.assertIn("| sample-project/contract-tests | gradle.yml | ❌ command_failed | 46s | 0 | 0 | 0 | http://example.local/workflows/gradle |", markdown)
         self.assertNotIn("Summary JSON excerpt", markdown)
         self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", markdown)
@@ -282,10 +284,11 @@ class BridgeCallbackTest(unittest.TestCase):
                 "failed_tests": 1,
             },
             "failure",
-            "http://example.local/orchestrator/run/1",
+            "http://example.local/enterprise/run/101",
         )
 
         self.assertIn("| Total tests | 3 |", markdown)
+        self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
         self.assertNotIn("Summary JSON excerpt", markdown)
         self.assertNotIn("```json", markdown)
 
@@ -325,7 +328,7 @@ class BridgeCallbackTest(unittest.TestCase):
         markdown = __import__("scripts.bridge_to_enterprise", fromlist=["summary_markdown"]).summary_markdown(
             summary,
             "failure",
-            "http://example.local/orchestrator/run/1",
+            "http://example.local/enterprise/run/101",
         )
 
         self.assertIn("| Total workflows | 2 |", markdown)
@@ -334,6 +337,7 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Failed tests | 6 |", markdown)
         self.assertIn("| Skipped tests | 5 |", markdown)
         self.assertIn("| Duration | 152 |", markdown)
+        self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
 
 
 if __name__ == "__main__":

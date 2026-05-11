@@ -171,7 +171,15 @@ def infer_conclusion(summary: dict[str, Any]) -> str:
     return "failure"
 
 
-def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
+def enterprise_run_url(repository: str, run_id: str | None, configured_url: str | None = None) -> str:
+    if configured_url:
+        return configured_url
+    if run_id:
+        return f"https://github.com/{repository}/actions/runs/{run_id}"
+    return "n/a"
+
+
+def summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> str:
     total_workflows = summary_count(summary, "total")
     passed_workflows = summary_count(summary, "passed_count")
     failed_workflows = summary_count(summary, "failed_count")
@@ -189,7 +197,7 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
         ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
         ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
         ("Duration", duration if duration is not None else "n/a"),
-        ("Orchestrator run", orchestrator_run_url),
+        ("Enterprise run", triggering_enterprise_run_url),
     ]
 
     body = ["| Key | Value |", "| --- | --- |"]
@@ -268,7 +276,7 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_
     return "\n".join(body)
 
 
-def compact_summary_markdown(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> str:
+def compact_summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> str:
     total_workflows = summary_count(summary, "total")
     passed_workflows = summary_count(summary, "passed_count")
     failed_workflows = summary_count(summary, "failed_count")
@@ -286,7 +294,7 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, orchestra
         ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
         ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
         ("Duration", duration if duration is not None else "n/a"),
-        ("Orchestrator run", orchestrator_run_url),
+        ("Enterprise run", triggering_enterprise_run_url),
     ]
 
     body = ["| Key | Value |", "| --- | --- |"]
@@ -330,14 +338,14 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, orchestra
     return "\n".join(body)
 
 
-def append_workflow_summary(summary: dict[str, Any], conclusion: str, orchestrator_run_url: str) -> None:
+def append_workflow_summary(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> None:
     step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not step_summary_path:
         return
 
     with Path(step_summary_path).open("a", encoding="utf-8") as handle:
         handle.write("## Specmatic Orchestration Result\n\n")
-        handle.write(summary_markdown(summary, conclusion, orchestrator_run_url))
+        handle.write(summary_markdown(summary, conclusion, triggering_enterprise_run_url))
         handle.write("\n")
 
 
@@ -448,6 +456,7 @@ def create_check_run(
     head_sha: str,
     conclusion: str,
     orchestrator_run_url: str,
+    triggering_enterprise_run_url: str,
     summary: dict[str, Any],
     api_base_url: str,
     enterprise_run_id: str | None,
@@ -464,7 +473,7 @@ def create_check_run(
         "details_url": orchestrator_run_url,
         "output": {
             "title": f"Specmatic orchestrator for run {run_id} attempt {attempt}",
-            "summary": compact_summary_markdown(summary, conclusion, orchestrator_run_url),
+            "summary": compact_summary_markdown(summary, conclusion, triggering_enterprise_run_url),
         },
     }
     github_request("POST", f"{api_base_url}/repos/{repository}/check-runs", token, payload)
@@ -512,6 +521,7 @@ def main() -> int:
     enterprise_sha = env("ENTERPRISE_SHA")
     enterprise_run_id = os.environ.get("ENTERPRISE_RUN_ID")
     enterprise_run_attempt = os.environ.get("ENTERPRISE_RUN_ATTEMPT")
+    enterprise_status_target_url = os.environ.get("ENTERPRISE_STATUS_TARGET_URL")
     orchestrator_run_url = env("ORCHESTRATOR_RUN_URL")
     orchestrator_run_id = env("ORCHESTRATOR_RUN_ID")
     orchestrator_run_attempt = env("ORCHESTRATOR_RUN_ATTEMPT")
@@ -520,12 +530,17 @@ def main() -> int:
         enterprise_run_id,
         enterprise_run_attempt,
     )
+    triggering_enterprise_run_url = enterprise_run_url(
+        enterprise_repository,
+        enterprise_run_id,
+        enterprise_status_target_url,
+    )
     enable_repository_dispatch = env("ENABLE_REPOSITORY_DISPATCH_CALLBACK", "false").strip().lower() in {"1", "true", "yes"}
 
     print(f"Inferred conclusion: {conclusion}")
     print(f"Enterprise repository: {enterprise_repository}")
     print(f"Enterprise SHA: {enterprise_sha}")
-    append_workflow_summary(summary, conclusion, orchestrator_run_url)
+    append_workflow_summary(summary, conclusion, triggering_enterprise_run_url)
 
     errors: list[str] = []
 
