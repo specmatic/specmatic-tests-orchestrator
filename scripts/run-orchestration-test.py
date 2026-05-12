@@ -3721,7 +3721,7 @@ def render_error_summary(error_summary: list[dict[str, str]], limit: int = 20) -
 
 
 def render_summary_table(results: list[WorkflowResult]) -> str:
-    headers = ["Repository", "Workflow", "Status", "Tests", "Failed", "Skipped", "Commands", "Time", "Log"]
+    headers = ["Repository", "Workflow", "Status", "Tests", "Failed", "Skipped", "Commands", "Completed in", "Log"]
     rows = [
         [
             f"{result.type}/{result.repository}",

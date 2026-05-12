@@ -10,6 +10,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 class _CallbackServer(HTTPServer):
@@ -391,6 +392,24 @@ class BridgeCallbackTest(unittest.TestCase):
 
         self.assertIn("| Duration | 10m 15s |", markdown)
         self.assertNotIn("| Duration | 1h 08m 17s |", markdown)
+
+    def test_github_workflow_duration_uses_current_time_for_in_progress_runs(self) -> None:
+        bridge = __import__("scripts.bridge_to_enterprise", fromlist=["github_workflow_duration_seconds"])
+        real_datetime = bridge.datetime
+        fake_now = real_datetime(2026, 5, 12, 0, 36, 53, tzinfo=bridge.timezone.utc)
+
+        with mock.patch.object(bridge, "datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = fake_now
+            mocked_datetime.fromisoformat.side_effect = real_datetime.fromisoformat
+            duration = bridge.github_workflow_duration_seconds(
+                {
+                    "status": "in_progress",
+                    "run_started_at": "2026-05-12T00:00:00Z",
+                    "updated_at": "2026-05-12T00:00:04Z",
+                }
+            )
+
+        self.assertEqual(duration, 2213)
 
 
 if __name__ == "__main__":

@@ -1761,6 +1761,7 @@ jobs:
         table = run_orchestration_test.render_summary_table([result])
 
         self.assertIn("Repository", table)
+        self.assertIn("Completed in", table)
         self.assertIn("sample-project/specmatic-order-bff-java", table)
         self.assertIn("❌", table)
         self.assertIn("8", table)

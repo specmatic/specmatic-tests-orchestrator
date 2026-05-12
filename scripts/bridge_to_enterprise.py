@@ -8,7 +8,7 @@ import subprocess
 import urllib.parse
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -127,9 +127,15 @@ def parse_github_datetime(value: Any) -> datetime | None:
 
 
 def github_workflow_duration_seconds(run: dict[str, Any]) -> int | None:
-    started = parse_github_datetime(run.get("created_at")) or parse_github_datetime(run.get("run_started_at"))
-    finished = parse_github_datetime(run.get("updated_at")) or parse_github_datetime(run.get("completed_at"))
-    if started is None or finished is None:
+    started = parse_github_datetime(run.get("run_started_at")) or parse_github_datetime(run.get("created_at"))
+    if started is None:
+        return None
+    status = str(run.get("status") or "").strip().lower()
+    if status == "completed":
+        finished = parse_github_datetime(run.get("completed_at")) or parse_github_datetime(run.get("updated_at"))
+    else:
+        finished = datetime.now(timezone.utc)
+    if finished is None:
         return None
     return max(0, int((finished - started).total_seconds()))
 
