@@ -18,9 +18,28 @@ class _CallbackServer(HTTPServer):
         self.requests: list[dict[str, Any]] = []
         self.event = threading.Event()
         self.expected_requests = expected_requests
+        self.run_payload: dict[str, Any] = {}
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        self.server.requests.append(  # type: ignore[attr-defined]
+            {
+                "path": self.path,
+                "headers": dict(self.headers),
+                "payload": None,
+                "method": "GET",
+            }
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        payload = json.dumps(self.server.run_payload).encode("utf-8")  # type: ignore[attr-defined]
+        self.wfile.write(payload)
+
+        if len(self.server.requests) >= self.server.expected_requests:  # type: ignore[attr-defined]
+            self.server.event.set()  # type: ignore[attr-defined]
+
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8")
@@ -34,6 +53,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
                 "path": self.path,
                 "headers": dict(self.headers),
                 "payload": payload,
+                "method": "POST",
             }
         )
 
@@ -72,7 +92,12 @@ class BridgeCallbackTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            server = _CallbackServer(("127.0.0.1", 0), expected_requests=1)
+            server = _CallbackServer(("127.0.0.1", 0), expected_requests=2)
+            server.run_payload = {
+                "id": 202,
+                "created_at": "2026-05-08T00:00:00Z",
+                "updated_at": "2026-05-08T00:10:15Z",
+            }
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -104,7 +129,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 )
 
                 self.assertTrue(server.event.wait(5), "timed out waiting for status POST")
-                self.assertEqual(len(server.requests), 1)
+                self.assertEqual(len(server.requests), 2)
 
                 status = next(request for request in server.requests if request["path"].endswith("/statuses/abc123def456"))
 
@@ -173,7 +198,12 @@ class BridgeCallbackTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            server = _CallbackServer(("127.0.0.1", 0), expected_requests=1)
+            server = _CallbackServer(("127.0.0.1", 0), expected_requests=2)
+            server.run_payload = {
+                "id": 202,
+                "created_at": "2026-05-08T00:00:00Z",
+                "updated_at": "2026-05-08T00:10:15Z",
+            }
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -208,7 +238,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 )
 
                 self.assertTrue(server.event.wait(5), "timed out waiting for status POST")
-                self.assertEqual(len(server.requests), 1)
+                self.assertEqual(len(server.requests), 2)
                 status = next(request for request in server.requests if request["path"].endswith("/statuses/abc123def456"))
 
                 self.assertEqual(status["payload"]["state"], "failure")
@@ -222,7 +252,7 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
                 self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", step_summary)
-                self.assertIn("| Duration | 2m 32s |", step_summary)
+                self.assertIn("| Duration | 10m 15s |", step_summary)
                 self.assertIn(
                     "| sample-project/contract-tests | gradle.yml | ❌ | 1m 58s | 227 | 5 | 4 | http://example.local/workflows/gradle |",
                     step_summary,
@@ -339,6 +369,28 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Skipped tests | 5 |", markdown)
         self.assertIn("| Duration | 2m 32s |", markdown)
         self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
+
+    def test_summary_markdown_prefers_orchestrator_duration_override(self) -> None:
+        summary = {
+            "conclusion": "success",
+            "total": 2,
+            "passed_count": 2,
+            "failed_count": 0,
+            "total_tests": 10,
+            "failed_tests": 0,
+            "skipped_tests": 0,
+            "duration_seconds": 4097,
+        }
+
+        markdown = __import__("scripts.bridge_to_enterprise", fromlist=["summary_markdown"]).summary_markdown(
+            summary,
+            "success",
+            "http://example.local/enterprise/run/101",
+            615,
+        )
+
+        self.assertIn("| Duration | 10m 15s |", markdown)
+        self.assertNotIn("| Duration | 1h 08m 17s |", markdown)
 
 
 if __name__ == "__main__":

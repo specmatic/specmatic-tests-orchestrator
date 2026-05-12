@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import urllib.parse
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -114,6 +116,24 @@ def format_elapsed_time(seconds: int) -> str:
     return f"{remaining_seconds}s"
 
 
+def parse_github_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def github_workflow_duration_seconds(run: dict[str, Any]) -> int | None:
+    started = parse_github_datetime(run.get("created_at")) or parse_github_datetime(run.get("run_started_at"))
+    finished = parse_github_datetime(run.get("updated_at")) or parse_github_datetime(run.get("completed_at"))
+    if started is None or finished is None:
+        return None
+    return max(0, int((finished - started).total_seconds()))
+
+
 def status_with_icon(status: Any) -> str:
     normalized = str(status or "n/a").strip().lower()
     icons = {
@@ -148,6 +168,14 @@ def concise_result_details(details: Any) -> str:
     if len(value) > 120:
         return value[:117] + "..."
     return value
+
+
+def parse_repo_from_run_url(orchestrator_run_url: str) -> str | None:
+    parsed = urllib.parse.urlsplit(orchestrator_run_url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
 
 
 def infer_conclusion(summary: dict[str, Any]) -> str:
@@ -188,14 +216,19 @@ def enterprise_run_url(repository: str, run_id: str | None, configured_url: str 
     return "n/a"
 
 
-def summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> str:
+def summary_markdown(
+    summary: dict[str, Any],
+    conclusion: str,
+    triggering_enterprise_run_url: str,
+    orchestrator_duration_seconds: int | None = None,
+) -> str:
     total_workflows = summary_count(summary, "total")
     passed_workflows = summary_count(summary, "passed_count")
     failed_workflows = summary_count(summary, "failed_count")
     total_tests = summary_count(summary, "total_tests")
     failed_tests = summary_count(summary, "failed_tests")
     skipped_tests = summary_count(summary, "skipped_tests")
-    duration = summary_count(summary, "duration_seconds")
+    duration = orchestrator_duration_seconds if orchestrator_duration_seconds is not None else summary_count(summary, "duration_seconds")
 
     rows = [
         ("Conclusion", conclusion),
@@ -285,14 +318,19 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterp
     return "\n".join(body)
 
 
-def compact_summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> str:
+def compact_summary_markdown(
+    summary: dict[str, Any],
+    conclusion: str,
+    triggering_enterprise_run_url: str,
+    orchestrator_duration_seconds: int | None = None,
+) -> str:
     total_workflows = summary_count(summary, "total")
     passed_workflows = summary_count(summary, "passed_count")
     failed_workflows = summary_count(summary, "failed_count")
     total_tests = summary_count(summary, "total_tests")
     failed_tests = summary_count(summary, "failed_tests")
     skipped_tests = summary_count(summary, "skipped_tests")
-    duration = summary_count(summary, "duration_seconds")
+    duration = orchestrator_duration_seconds if orchestrator_duration_seconds is not None else summary_count(summary, "duration_seconds")
 
     rows = [
         ("Conclusion", conclusion),
@@ -347,14 +385,19 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, triggerin
     return "\n".join(body)
 
 
-def append_workflow_summary(summary: dict[str, Any], conclusion: str, triggering_enterprise_run_url: str) -> None:
+def append_workflow_summary(
+    summary: dict[str, Any],
+    conclusion: str,
+    triggering_enterprise_run_url: str,
+    orchestrator_duration_seconds: int | None = None,
+) -> None:
     step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not step_summary_path:
         return
 
     with Path(step_summary_path).open("a", encoding="utf-8") as handle:
         handle.write("## Specmatic Orchestration Result\n\n")
-        handle.write(summary_markdown(summary, conclusion, triggering_enterprise_run_url))
+        handle.write(summary_markdown(summary, conclusion, triggering_enterprise_run_url, orchestrator_duration_seconds))
         handle.write("\n")
 
 
@@ -373,6 +416,33 @@ def github_request(method: str, url: str, token: str, payload: dict[str, Any]) -
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def github_get_json(url: str, token: str) -> dict[str, Any]:
+    request = urllib.request.Request(url, method="GET")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response_body = response.read().decode("utf-8")
+            return json.loads(response_body) if response_body else {}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub API request failed ({exc.code}): {body}") from exc
+
+
+def fetch_orchestrator_duration_seconds(
+    orchestrator_run_url: str,
+    orchestrator_run_id: str,
+    token: str,
+    api_base_url: str,
+) -> int | None:
+    repo_slug = parse_repo_from_run_url(orchestrator_run_url)
+    if not repo_slug or not orchestrator_run_id:
+        return None
+    run = github_get_json(f"{api_base_url}/repos/{repo_slug}/actions/runs/{orchestrator_run_id}", token)
+    return github_workflow_duration_seconds(run)
 
 
 def github_curl_request(method: str, url: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -466,6 +536,7 @@ def create_check_run(
     conclusion: str,
     orchestrator_run_url: str,
     triggering_enterprise_run_url: str,
+    orchestrator_duration_seconds: int | None,
     summary: dict[str, Any],
     api_base_url: str,
     enterprise_run_id: str | None,
@@ -482,7 +553,12 @@ def create_check_run(
         "details_url": orchestrator_run_url,
         "output": {
             "title": f"Specmatic orchestrator for run {run_id} attempt {attempt}",
-            "summary": compact_summary_markdown(summary, conclusion, triggering_enterprise_run_url),
+            "summary": compact_summary_markdown(
+                summary,
+                conclusion,
+                triggering_enterprise_run_url,
+                orchestrator_duration_seconds,
+            ),
         },
     }
     github_request("POST", f"{api_base_url}/repos/{repository}/check-runs", token, payload)
@@ -549,7 +625,22 @@ def main() -> int:
     print(f"Inferred conclusion: {conclusion}")
     print(f"Enterprise repository: {enterprise_repository}")
     print(f"Enterprise SHA: {enterprise_sha}")
-    append_workflow_summary(summary, conclusion, triggering_enterprise_run_url)
+    orchestrator_duration_seconds: int | None = None
+    try:
+        orchestrator_duration_seconds = fetch_orchestrator_duration_seconds(
+            orchestrator_run_url=orchestrator_run_url,
+            orchestrator_run_id=orchestrator_run_id,
+            token=callback_token,
+            api_base_url=api_base_url,
+        )
+    except Exception as exc:
+        print(f"Could not resolve orchestrator workflow duration: {exc}")
+    append_workflow_summary(
+        summary,
+        conclusion,
+        triggering_enterprise_run_url,
+        orchestrator_duration_seconds,
+    )
 
     errors: list[str] = []
 
