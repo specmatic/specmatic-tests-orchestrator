@@ -104,6 +104,16 @@ def workflow_display_name(workflow: Any) -> str:
     return Path(value).name
 
 
+def format_elapsed_time(seconds: int) -> str:
+    minutes, remaining_seconds = divmod(max(0, seconds), 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {remaining_minutes:02d}m {remaining_seconds:02d}s"
+    if minutes:
+        return f"{minutes}m {remaining_seconds:02d}s"
+    return f"{remaining_seconds}s"
+
+
 def status_with_icon(status: Any) -> str:
     normalized = str(status or "n/a").strip().lower()
     icons = {
@@ -125,8 +135,7 @@ def status_with_icon(status: Any) -> str:
         "action_required": "⚠️",
         "neutral": "➖",
     }
-    icon = icons.get(normalized, "❔")
-    return f"{icon} {normalized or 'n/a'}"
+    return icons.get(normalized, "❔")
 
 
 def concise_result_details(details: Any) -> str:
@@ -196,7 +205,7 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterp
         ("Total tests", total_tests if total_tests is not None else "n/a"),
         ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
         ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
-        ("Duration", duration if duration is not None else "n/a"),
+        ("Duration", format_elapsed_time(duration) if duration is not None else "n/a"),
         ("Enterprise run", triggering_enterprise_run_url),
     ]
 
@@ -221,7 +230,7 @@ def summary_markdown(summary: dict[str, Any], conclusion: str, triggering_enterp
             repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
             details = concise_result_details(result.get("details"))
             duration = as_int(result.get("duration_seconds"))
-            duration_display = f"{duration}s" if duration is not None else "n/a"
+            duration_display = format_elapsed_time(duration) if duration is not None else "n/a"
             body.append(
                 "| "
                 + " | ".join(
@@ -293,7 +302,7 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, triggerin
         ("Total tests", total_tests if total_tests is not None else "n/a"),
         ("Failed tests", failed_tests if failed_tests is not None else "n/a"),
         ("Skipped tests", skipped_tests if skipped_tests is not None else "n/a"),
-        ("Duration", duration if duration is not None else "n/a"),
+        ("Duration", format_elapsed_time(duration) if duration is not None else "n/a"),
         ("Enterprise run", triggering_enterprise_run_url),
     ]
 
@@ -318,7 +327,7 @@ def compact_summary_markdown(summary: dict[str, Any], conclusion: str, triggerin
             repository = f"{result.get('type', '')}/{result.get('repository', '')}".strip("/")
             details = concise_result_details(result.get("details"))
             duration = as_int(result.get("duration_seconds"))
-            duration_display = f"{duration}s" if duration is not None else "n/a"
+            duration_display = format_elapsed_time(duration) if duration is not None else "n/a"
             body.append(
                 "| "
                 + " | ".join(

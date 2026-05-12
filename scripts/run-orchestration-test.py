@@ -1138,6 +1138,24 @@ def format_elapsed_time(seconds: int) -> str:
     return f"{remaining_seconds}s"
 
 
+def parse_github_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def workflow_run_duration_seconds(run: dict[str, Any], fallback_seconds: int) -> int:
+    started = parse_github_datetime(run.get("run_started_at")) or parse_github_datetime(run.get("created_at"))
+    finished = parse_github_datetime(run.get("updated_at")) or parse_github_datetime(run.get("completed_at"))
+    if started is None or finished is None:
+        return max(0, fallback_seconds)
+    return max(0, int((finished - started).total_seconds()))
+
+
 def parallel_workflow_status(item: ParallelWorkflowRun) -> str:
     if item.error_message:
         return "failed"
@@ -1232,6 +1250,9 @@ def workflow_result_from_github_run(
     conclusion = str(run.get("conclusion") or "failure")
     status = github_conclusion_to_workflow_status(conclusion)
     html_url = str(run.get("html_url") or "")
+    actual_started_at = str(run.get("run_started_at") or run.get("created_at") or started_at)
+    actual_finished_at = str(run.get("updated_at") or run.get("completed_at") or utc_now())
+    actual_duration_seconds = workflow_run_duration_seconds(run, elapsed_seconds)
     details = f"GitHub Actions workflow_dispatch concluded with {conclusion}"
     if html_url:
         details = f"{details}; details: {html_url}"
@@ -1282,7 +1303,7 @@ def workflow_result_from_github_run(
         workflow=workflow_label,
         status=status,
         exit_code=0 if status == STATUS_PASSED else 1,
-        duration_seconds=elapsed_seconds,
+        duration_seconds=actual_duration_seconds,
         commands=[],
         executed_commands=[],
         output_dir=str(output_dir),
@@ -1291,8 +1312,8 @@ def workflow_result_from_github_run(
         total_tests=total_tests,
         failed_tests=failed_tests,
         skipped_tests=skipped_tests,
-        started_at=started_at,
-        finished_at=utc_now(),
+        started_at=actual_started_at,
+        finished_at=actual_finished_at,
         details=details,
     )
     write_json(output_dir / "result.json", asdict(result))
@@ -3705,12 +3726,12 @@ def render_summary_table(results: list[WorkflowResult]) -> str:
         [
             f"{result.type}/{result.repository}",
             Path(result.workflow).stem,
-            f"{status_symbol(result.status)} {result.status}",
+            status_symbol(result.status),
             str(result.total_tests),
             str(result.failed_tests),
             str(result.skipped_tests),
             str(len(result.executed_commands)),
-            f"{result.duration_seconds}s",
+            format_elapsed_time(result.duration_seconds),
             result.log_file,
         ]
         for result in results
@@ -3755,17 +3776,17 @@ def render_non_dispatchable_workflow_table(results: list[WorkflowResult]) -> str
 
 def status_symbol(status: str) -> str:
     if status == STATUS_SKIPPED:
-        return "SKIP"
+        return "⏭️"
     if status == STATUS_CANCELLED:
-        return "ABORT"
+        return "🚫"
     if status == STATUS_TIMED_OUT:
-        return "TIMEOUT"
+        return "⏱️"
     if status == STATUS_ACTION_REQUIRED:
-        return "ACTION"
+        return "⚠️"
     if status == STATUS_NEUTRAL:
-        return "NEUTRAL"
+        return "➖"
     if status == STATUS_STARTUP_FAILURE:
-        return "STARTUP"
+        return "⚠️"
     return "✅" if status in {STATUS_PASSED, "PASSED"} else "❌"
 
 
@@ -3922,7 +3943,7 @@ def render_workflow_page(result: WorkflowResult, outputs_dir: Path) -> None:
         "<li>"
         f"<strong>{html_escape(command.step_name)}</strong> "
         f"<code>{html_escape(command.command)}</code> "
-        f"(dir: <code>{html_escape(command.working_directory)}</code>, exit: {html_escape(command.exit_code)}, time: {html_escape(command.duration_seconds)}s)"
+        f"(dir: <code>{html_escape(command.working_directory)}</code>, exit: {html_escape(command.exit_code)}, time: {html_escape(format_elapsed_time(command.duration_seconds))})"
         "</li>"
         for command in result.executed_commands
     ]
@@ -3936,7 +3957,7 @@ def render_workflow_page(result: WorkflowResult, outputs_dir: Path) -> None:
         workflow_status_class=html_escape(result.status),
         workflow_status_label=status_symbol(result.status),
         repo_ref=html_escape(f"{result.branch or 'default'}"),
-        workflow_duration=html_escape(f"{result.duration_seconds}s"),
+        workflow_duration=html_escape(format_elapsed_time(result.duration_seconds)),
         workflow_total_tests=html_escape(result.total_tests),
         workflow_failures=html_escape(result.failed_tests),
         workflow_skipped=html_escape(result.skipped_tests),
@@ -3971,7 +3992,7 @@ def render_dashboard(outputs_dir: Path, summary: dict[str, Any], results: list[W
               <td><a href="{html_escape(relative_href(outputs_dir / "index.html", page_path))}">{html_escape(result.type + "/" + result.repository)}</a></td>
               <td>{html_escape(Path(result.workflow).stem)}</td>
               <td><span class="badge {badge_class}">{status_symbol(result.status)}</span></td>
-              <td>{html_escape(result.duration_seconds)}s</td>
+              <td>{html_escape(format_elapsed_time(result.duration_seconds))}</td>
               <td>{html_escape(result.failed_tests)}</td>
               <td>{html_escape(result.total_tests)}</td>
               <td>{html_escape(result.skipped_tests)}</td>

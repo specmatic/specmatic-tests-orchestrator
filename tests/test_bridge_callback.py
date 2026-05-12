@@ -222,8 +222,9 @@ class BridgeCallbackTest(unittest.TestCase):
                 self.assertIn("| Total tests | 233 |", step_summary)
                 self.assertIn("| Failed tests | 6 |", step_summary)
                 self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", step_summary)
+                self.assertIn("| Duration | 2m 32s |", step_summary)
                 self.assertIn(
-                    "| sample-project/contract-tests | gradle.yml | ❌ failed | 118s | 227 | 5 | 4 | http://example.local/workflows/gradle |",
+                    "| sample-project/contract-tests | gradle.yml | ❌ | 1m 58s | 227 | 5 | 4 | http://example.local/workflows/gradle |",
                     step_summary,
                 )
                 self.assertIn("Error summary and actionable steps:", step_summary)
@@ -270,7 +271,7 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Total tests | 0 |", markdown)
         self.assertIn("| Failed tests | 0 |", markdown)
         self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
-        self.assertIn("| sample-project/contract-tests | gradle.yml | ❌ command_failed | 46s | 0 | 0 | 0 | http://example.local/workflows/gradle |", markdown)
+        self.assertIn("| sample-project/contract-tests | gradle.yml | ❌ | 46s | 0 | 0 | 0 | http://example.local/workflows/gradle |", markdown)
         self.assertNotIn("Summary JSON excerpt", markdown)
         self.assertIn("Full details are available in the `specmatic-outputs` workflow artifact", markdown)
 
@@ -336,7 +337,7 @@ class BridgeCallbackTest(unittest.TestCase):
         self.assertIn("| Total tests | 233 |", markdown)
         self.assertIn("| Failed tests | 6 |", markdown)
         self.assertIn("| Skipped tests | 5 |", markdown)
-        self.assertIn("| Duration | 152 |", markdown)
+        self.assertIn("| Duration | 2m 32s |", markdown)
         self.assertIn("| Enterprise run | http://example.local/enterprise/run/101 |", markdown)
 
 

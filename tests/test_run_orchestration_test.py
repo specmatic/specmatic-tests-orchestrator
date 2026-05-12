@@ -1762,8 +1762,10 @@ jobs:
 
         self.assertIn("Repository", table)
         self.assertIn("sample-project/specmatic-order-bff-java", table)
+        self.assertIn("❌", table)
         self.assertIn("8", table)
         self.assertIn("2", table)
+        self.assertNotIn("❌ failed", table)
 
     def test_log_progress_does_not_fail_on_cp1252_stdout(self) -> None:
         with tempfile.TemporaryFile("w+", encoding="cp1252") as stdout:
@@ -2063,9 +2065,11 @@ jobs:
                         "status": "completed",
                         "conclusion": "failure",
                         "html_url": "https://example.com/run/123",
+                        "run_started_at": "2026-05-08T00:00:30Z",
+                        "updated_at": "2026-05-08T00:02:05Z",
                     },
                     started_at="2026-05-08T00:00:00Z",
-                    elapsed_seconds=5,
+                    elapsed_seconds=300,
                     github_token="token",
                     api_base_url="https://api.github.com",
                 )
@@ -2073,6 +2077,9 @@ jobs:
             self.assertEqual(result.total_tests, 2)
             self.assertEqual(result.failed_tests, 1)
             self.assertEqual(result.skipped_tests, 1)
+            self.assertEqual(result.duration_seconds, 95)
+            self.assertEqual(result.started_at, "2026-05-08T00:00:30Z")
+            self.assertEqual(result.finished_at, "2026-05-08T00:02:05Z")
             self.assertTrue(result.copied_result_paths)
 
     def test_workflow_result_from_github_run_dedupes_ctrf_counts_across_artifacts(self) -> None:
