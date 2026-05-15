@@ -904,6 +904,49 @@ jobs:
             )
         )
 
+    def test_treats_playwright_group_wrapper_script_as_runnable_test_command(self) -> None:
+        self.assertTrue(
+            run_orchestration_test.is_runnable_workflow_command(
+                "bash scripts/github/run-playwright-group.sh",
+                ".github/workflows/playwright-matrix.yml",
+            )
+        )
+        self.assertFalse(
+            run_orchestration_test.is_runnable_workflow_command(
+                "bash scripts/github/run-playwright-group.sh",
+                ".github/workflows/gradle.yml",
+            )
+        )
+
+    def test_keeps_dispatchable_playwright_workflow_when_test_logic_is_wrapped_in_script(self) -> None:
+        workflow_text = """
+name: Studio - Matrix Playwright Tests
+on:
+  workflow_dispatch:
+jobs:
+  matrix-tests:
+    strategy:
+      matrix:
+        group:
+          - workflow_name: OpenAPI Examples
+            test_path: specs/openapi/generate-valid-examples
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies and set up environment
+        run: bash scripts/github/setup-playwright-ci.sh
+      - name: Run Playwright tests
+        run: bash scripts/github/run-playwright-group.sh
+      - name: Fail job if there are test failures
+        run: bash scripts/github/verify-playwright-results.sh
+""".lstrip()
+
+        self.assertTrue(
+            run_orchestration_test.should_consider_workflow_for_execution_text(
+                workflow_text,
+                ".github/workflows/playwright-matrix.yml",
+            )
+        )
+
     def test_apply_gradle_version_overrides_adds_properties(self) -> None:
         command = ["./gradlew", "test"]
         overridden = run_orchestration_test.apply_gradle_version_overrides(

@@ -1635,12 +1635,27 @@ def is_playwright_setup_command(command: str, workflow_file_path: str) -> bool:
     return False
 
 
+def is_playwright_test_wrapper_command(command: str, workflow_file_path: str) -> bool:
+    lower = command.lower().strip()
+    workflow_lower = workflow_file_path.lower()
+    if "playwright" not in workflow_lower:
+        return False
+    return (
+        "scripts/github/run-playwright-group.sh" in lower
+        or "scripts\\github\\run-playwright-group.sh" in lower
+    )
+
+
 def is_runnable_workflow_command(
     command: str,
     workflow_file_path: str,
     allow_matrix_expressions: bool = False,
 ) -> bool:
-    return is_test_command(command, allow_matrix_expressions=allow_matrix_expressions) or is_playwright_setup_command(command, workflow_file_path)
+    return (
+        is_test_command(command, allow_matrix_expressions=allow_matrix_expressions)
+        or is_playwright_setup_command(command, workflow_file_path)
+        or is_playwright_test_wrapper_command(command, workflow_file_path)
+    )
 
 
 def split_logical_commands(run_block: str) -> list[str]:
