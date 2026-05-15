@@ -745,6 +745,34 @@ jobs:
             )
         )
 
+    def test_keeps_dispatchable_simple_matrix_workflow_with_matrix_expression_command(self) -> None:
+        workflow_text = """
+name: Java CI with Gradle
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        receive: [kafka, sqs, mqtt, jms, amqp]
+    steps:
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew test --tests "**.ContractTest" \
+            -Dreceive.protocol=${{ matrix.receive }} \
+            --no-daemon --rerun-tasks
+""".lstrip()
+
+        self.assertTrue(
+            run_orchestration_test.should_consider_workflow_for_execution_text(
+                workflow_text,
+                ".github/workflows/gradle.yml",
+            )
+        )
+
     def test_expands_matrix_include_commands(self) -> None:
         original_is_linux_host = run_orchestration_test.is_linux_host
         try:

@@ -1378,6 +1378,15 @@ def has_unresolved_github_expression(command: str) -> bool:
     return "${{" in command and "}}" in command
 
 
+def unresolved_github_expression_keys(command: str) -> list[str]:
+    return re.findall(r"\$\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}", command)
+
+
+def has_only_matrix_github_expressions(command: str) -> bool:
+    keys = unresolved_github_expression_keys(command)
+    return bool(keys) and all(key.startswith("matrix.") for key in keys)
+
+
 def strip_yaml_value(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
@@ -1575,8 +1584,9 @@ def should_consider_workflow_for_execution_text(text: str, workflow_label: str) 
         repo_dir=synthetic_repo_dir,
         lines=lines,
         input_values={},
+        allow_matrix_expressions=True,
     )
-    if any(is_test_command(command.command) for command in commands):
+    if any(is_test_command(command.command, allow_matrix_expressions=True) for command in commands):
         return True
     return bool(parse_reusable_workflow_calls(lines))
 
@@ -1589,13 +1599,14 @@ def should_consider_workflow_for_execution(workflow_file: Path, repo_dir: Path) 
     )
 
 
-def is_test_command(command: str) -> bool:
+def is_test_command(command: str, allow_matrix_expressions: bool = False) -> bool:
     lower = f" {command.lower()} "
     stripped_lower = lower.strip()
     if any(stripped_lower.startswith(prefix) for prefix in SKIP_COMMAND_PREFIXES):
         return False
     if has_unresolved_github_expression(command):
-        return False
+        if not allow_matrix_expressions or not has_only_matrix_github_expressions(command):
+            return False
     if "jacocotestreport" in lower or " -x test" in lower:
         return False
     if "gradlew" in lower or "gradle " in lower or "mvn" in lower or "pytest" in lower or "go test" in lower or "dotnet test" in lower:
@@ -1624,8 +1635,12 @@ def is_playwright_setup_command(command: str, workflow_file_path: str) -> bool:
     return False
 
 
-def is_runnable_workflow_command(command: str, workflow_file_path: str) -> bool:
-    return is_test_command(command) or is_playwright_setup_command(command, workflow_file_path)
+def is_runnable_workflow_command(
+    command: str,
+    workflow_file_path: str,
+    allow_matrix_expressions: bool = False,
+) -> bool:
+    return is_test_command(command, allow_matrix_expressions=allow_matrix_expressions) or is_playwright_setup_command(command, workflow_file_path)
 
 
 def split_logical_commands(run_block: str) -> list[str]:
@@ -1654,6 +1669,7 @@ def build_discovered_workflow_commands(
     run_block: str,
     matrix_includes: list[dict[str, str]],
     input_values: dict[str, str],
+    allow_matrix_expressions: bool = False,
 ) -> list[WorkflowCommand]:
     relative_workflow_path = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
     commands: list[WorkflowCommand] = []
@@ -1661,7 +1677,11 @@ def build_discovered_workflow_commands(
         line = substitute_input_expressions(line, input_values)
         for expanded_line, matrix_value in expand_matrix_expressions(line, matrix_includes):
             normalized = normalize_shellish_command(expanded_line)
-            if not normalized or not is_runnable_workflow_command(normalized, relative_workflow_path):
+            if not normalized or not is_runnable_workflow_command(
+                normalized,
+                relative_workflow_path,
+                allow_matrix_expressions=allow_matrix_expressions,
+            ):
                 continue
             commands.append(
                 WorkflowCommand(
@@ -1680,6 +1700,7 @@ def extract_workflow_commands_from_lines(
     repo_dir: Path,
     lines: list[str],
     input_values: dict[str, str],
+    allow_matrix_expressions: bool = False,
 ) -> list[WorkflowCommand]:
     matrix_includes = parse_matrix_includes(lines)
     commands: list[WorkflowCommand] = []
@@ -1717,6 +1738,7 @@ def extract_workflow_commands_from_lines(
                         run_block=substitute_input_expressions(run_block, input_values),
                         matrix_includes=matrix_includes,
                         input_values=input_values,
+                        allow_matrix_expressions=allow_matrix_expressions,
                     )
                 )
                 continue
@@ -1744,6 +1766,7 @@ def extract_workflow_commands_from_lines(
                     run_block=substitute_input_expressions(run_block, input_values),
                     matrix_includes=matrix_includes,
                     input_values=input_values,
+                    allow_matrix_expressions=allow_matrix_expressions,
                 )
             )
             continue
