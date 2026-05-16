@@ -3404,6 +3404,7 @@ def dispatch_remote_workflows(
     jar_url: str,
     jar_path: str,
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
+    dispatch_delay_seconds = 5
     if workflow_files:
         log_progress(f"    preparing workflow_dispatch requests for {len(workflow_files)} workflow(s)")
 
@@ -3430,6 +3431,14 @@ def dispatch_remote_workflows(
             dispatch_errors.append(error_result)
         if run is not None:
             dispatched.append(run)
+            if index < len(workflow_files):
+                next_index = index + 1
+                log_progress(
+                    "    waiting "
+                    f"{dispatch_delay_seconds}s before dispatching workflow {next_index}/{len(workflow_files)} "
+                    f"for {repo_slug}"
+                )
+                time.sleep(dispatch_delay_seconds)
 
     if dispatched:
         if len(dispatched) == len(workflow_files):

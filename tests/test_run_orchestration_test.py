@@ -1980,6 +1980,10 @@ jobs:
                     text="name: beta\non:\n  workflow_dispatch:\njobs:\n  test:\n    steps:\n      - run: npm test\n",
                 ),
             ]
+            sleep_calls: list[int] = []
+
+            def fake_sleep(seconds: int) -> None:
+                sleep_calls.append(seconds)
 
             with mock.patch.object(run_orchestration_test, "prepare_repo") as prepare_repo, \
                 mock.patch.object(run_orchestration_test, "discover_remote_workflow_files", return_value=remote_workflows), \
@@ -1987,7 +1991,7 @@ jobs:
                 mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
                 mock.patch.object(run_orchestration_test, "log_progress", side_effect=logs.append), \
                 mock.patch.object(run_orchestration_test.time, "time", side_effect=fake_time), \
-                mock.patch.object(run_orchestration_test.time, "sleep", return_value=None):
+                mock.patch.object(run_orchestration_test.time, "sleep", side_effect=fake_sleep):
                 results = run_orchestration_test.run_parallel_executor(
                     executor=executor,
                     temp_dir=temp_dir / "temp",
@@ -2005,11 +2009,16 @@ jobs:
         self.assertEqual(results[1].status, run_orchestration_test.STATUS_FAILED)
         combined_logs = "\n".join(logs)
         self.assertIn("discovered 2 dispatchable workflow files", combined_logs)
+        self.assertIn(
+            "waiting 5s before dispatching workflow 2/2 for specmatic/specmatic-studio-playwright-ts-tests",
+            combined_logs,
+        )
         self.assertIn("Dispatched successfully: 2/2 workflows", combined_logs)
         self.assertIn("Parallel workflow progress - Polling attempt 1", combined_logs)
         self.assertIn("Parallel workflow progress - Polling attempt 2", combined_logs)
         self.assertIn("alpha", combined_logs)
         self.assertIn("beta", combined_logs)
+        self.assertIn(5, sleep_calls)
 
     def test_main_dispatches_all_parallel_executors_before_waiting(self) -> None:
         with workspace_temp_dir() as temp_dir:
