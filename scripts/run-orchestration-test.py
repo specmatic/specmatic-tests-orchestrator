@@ -62,7 +62,7 @@ PARALLEL_PROGRESS_LOG_INTERVAL_SECONDS = 60
 WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS = 300
 PLAYWRIGHT_CONTAINER_NAMES = ["studio", "order-bff", "order-api", "inventory-api"]
 ENTERPRISE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
-ENTERPRISE_SNAPSHOT_REPO_URL = "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all"
+ENTERPRISE_SNAPSHOT_REPO_URL = "https://central.sonatype.com/repository/maven-snapshots/io/specmatic/enterprise/executable-all"
 ENTERPRISE_RELEASE_REPO_URL = "https://repo.specmatic.io/releases/io/specmatic/enterprise/executable-all"
 ENTERPRISE_ARTIFACT_PATH_MARKERS = (
     "/io/specmatic/enterprise/executable/",
