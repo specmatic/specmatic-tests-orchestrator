@@ -56,6 +56,20 @@
     "enterprise-version": "${ENTERPRISE_VERSION}"
   },
   {
+    "type": "sample-project",
+    "description": "Contract test for OrderAPI Java sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test OrderAPI Java with Oauth sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-java-with-oauth.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
     "type": "playwright-tests",
     "description": "UI tests for Studio",
     "github-url": "https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
