@@ -21,6 +21,41 @@
     "enterprise-version": "${ENTERPRISE_VERSION}"
   },
   {
+    "type": "sample-project",
+    "description": "Contract test for Order BFF GRPC sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-grpc-kotlin.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Order API GRPC sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-grpc-kotlin.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka AsyncApi3 sample project",
+    "github-url": "https://github.com/specmatic/specmatic-kafka-sample-asyncapi3.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka Avro sample project",
+    "github-url": "https://github.com/specmatic/specmatic-kafka-avro-sample.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka AsyncApi3 sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-graphql-consumer-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
     "type": "playwright-tests",
     "description": "UI tests for Studio",
     "github-url": "https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
