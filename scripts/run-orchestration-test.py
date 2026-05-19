@@ -1607,7 +1607,7 @@ def is_test_command(command: str, allow_matrix_expressions: bool = False) -> boo
     if has_unresolved_github_expression(command):
         if not allow_matrix_expressions or not has_only_matrix_github_expressions(command):
             return False
-    if "jacocotestreport" in lower or " -x test" in lower:
+    if " -x test" in lower:
         return False
     if "gradlew" in lower or "gradle " in lower or "mvn" in lower or "pytest" in lower or "go test" in lower or "dotnet test" in lower:
         return any(keyword in lower for keyword in TEST_KEYWORDS)

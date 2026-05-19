@@ -884,6 +884,13 @@ jobs:
     def test_skips_jacoco_report_commands_that_exclude_tests(self) -> None:
         self.assertFalse(run_orchestration_test.is_test_command("./gradlew jacocoTestReport -x test"))
 
+    def test_keeps_gradle_test_commands_that_also_generate_jacoco_reports(self) -> None:
+        self.assertTrue(
+            run_orchestration_test.is_test_command(
+                "./gradlew --no-daemon clean test bootJar jacocoTestReport"
+            )
+        )
+
     def test_treats_playwright_install_as_runnable_setup_command(self) -> None:
         self.assertTrue(
             run_orchestration_test.is_runnable_workflow_command(
