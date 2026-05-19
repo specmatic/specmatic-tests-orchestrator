@@ -3239,17 +3239,55 @@ def discover_parallel_workflow_selection(
             )
         ], None
 
+    discovered_labels = [workflow_file.label for workflow_file in discovered_workflow_files]
+    if discovered_labels:
+        log_progress(
+            "    remote workflow files returned by GitHub API: "
+            + ", ".join(sorted(discovered_labels))
+        )
+    else:
+        log_progress("    remote workflow files returned by GitHub API: none")
+
     candidate_workflow_files = [
         workflow_file
         for workflow_file in discovered_workflow_files
         if should_consider_workflow_for_execution_text(workflow_file.text, workflow_file.label)
     ]
+    candidate_labels = [workflow_file.label for workflow_file in candidate_workflow_files]
+    filtered_out_labels = [
+        workflow_file.label for workflow_file in discovered_workflow_files if workflow_file.label not in set(candidate_labels)
+    ]
+    if candidate_labels:
+        log_progress(
+            "    workflow files considered runnable by orchestrator: "
+            + ", ".join(sorted(candidate_labels))
+        )
+    else:
+        log_progress("    workflow files considered runnable by orchestrator: none")
+    if filtered_out_labels:
+        log_progress(
+            "    workflow files filtered out before workflow_dispatch check: "
+            + ", ".join(sorted(filtered_out_labels))
+        )
+
     workflow_files = [
         workflow_file for workflow_file in candidate_workflow_files if has_workflow_dispatch_trigger_in_text(workflow_file.text)
     ]
     non_dispatchable_workflow_files = [
         workflow_file for workflow_file in candidate_workflow_files if not has_workflow_dispatch_trigger_in_text(workflow_file.text)
     ]
+    if workflow_files:
+        log_progress(
+            "    dispatchable workflow files: "
+            + ", ".join(sorted(workflow_file.label for workflow_file in workflow_files))
+        )
+    else:
+        log_progress("    dispatchable workflow files: none")
+    if non_dispatchable_workflow_files:
+        log_progress(
+            "    runnable workflow files without workflow_dispatch: "
+            + ", ".join(sorted(workflow_file.label for workflow_file in non_dispatchable_workflow_files))
+        )
     log_progress(
         f"    discovered {len(workflow_files)} dispatchable workflow file"
         f"{'s' if len(workflow_files) != 1 else ''} in {repo_slug}"

@@ -1,0 +1,9 @@
+[
+  {
+    "type": "sample-project",
+    "description": "Contract test OrderAPI Java with Oauth sample project",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-java-with-oauth.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  }
+]
