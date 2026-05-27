@@ -33,9 +33,9 @@ on:
         description: Enterprise version to test, for example 1.12.1-SNAPSHOT
         required: true
         type: string
-      test_executor_path:
-        description: Optional test executor fixture path for manual runs
-        required: false
+      test_executor_json:
+        description: Test executor JSON content to run
+        required: true
         type: string
       enterprise_configuration:
         description: Runner OS/configuration to use for the orchestrated tests
@@ -45,11 +45,6 @@ on:
         options:
           - ubuntu-latest
           - windows-latest
-      run_parallel:
-        description: Dispatch target repository workflows in parallel and wait for them
-        required: false
-        default: false
-        type: boolean
   repository_dispatch:
     types:
       - specmatic-enterprise-jar-ready
@@ -79,11 +74,11 @@ jobs:
         with:
           python-version: "3.9"
 
-      - name: Validate workflow contract
+      - name: Run orchestrator self tests
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
-          python -B -m unittest tests.test_enterprise_workflow_contract
+          python -B -m unittest discover -s tests
 
       - name: Set up Specmatic License key
         if: github.event_name != 'push'
@@ -155,13 +150,24 @@ jobs:
               "ENTERPRISE_STATUS_TARGET_URL": pick_enterprise("status_target_url", "enterprise_status_target_url"),
               "ENTERPRISE_VERSION": pick_enterprise("version", "enterprise_version"),
               "ENTERPRISE_CONFIGURATION": pick_enterprise("configuration", "enterprise_configuration", default="ubuntu-latest"),
-              "ORCHESTRATOR_TEST_EXECUTOR_PATH": pick_option("test_executor_path"),
-              "RUN_PARALLEL": pick_option("run_parallel", default="false").lower(),
+              "ORCHESTRATOR_TEST_EXECUTOR_PATH": "",
               "SPEC_OUTPUTS_DIR": "outputs",
               "SPEC_CONSOLIDATED_DIR": "consolidated_output",
               "SPECMATIC_SUMMARY_JSON": "outputs/orchestration-summary.json",
               "SPECMATIC_SUMMARY_HTML": "outputs/index.html",
             }
+
+          test_executor_json = pick_option("test_executor_json")
+          if not test_executor_json:
+              raise SystemExit("orchestrator_options.test_executor_json is required for caller-triggered runs")
+          try:
+              json.loads(test_executor_json)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f"Invalid orchestrator_options.test_executor_json: {exc}") from exc
+          test_executor_path = Path(os.environ["RUNNER_TEMP"]) / "test-executor-from-payload.json"
+          test_executor_path.write_text(test_executor_json, encoding="utf-8")
+          values["ORCHESTRATOR_TEST_EXECUTOR_PATH"] = str(test_executor_path)
+          print(f"Wrote test executor manifest from payload to {test_executor_path}")
 
           for key, value in values.items():
               with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
@@ -217,18 +223,12 @@ jobs:
           export ENTERPRISE_VERSION
           export ORCHESTRATOR_TEST_EXECUTOR_PATH
           export SPEC_OUTPUTS_DIR
-          export RUN_PARALLEL
-          extra_args=()
-          if [ "${RUN_PARALLEL}" = "true" ]; then
-            extra_args+=(--run-parallel)
-          fi
           python scripts/run-orchestration-test.py \
             --config "${ORCHESTRATOR_TEST_EXECUTOR_PATH:-}" \
             --outputs-dir "$SPEC_OUTPUTS_DIR" \
             --specmatic-jar-url "$SPECMATIC_JAR_URL" \
             --specmatic-jar-path "$SPECMATIC_JAR_PATH" \
-            --enterprise-version "$ENTERPRISE_VERSION" \
-            "${extra_args[@]}"
+            --enterprise-version "$ENTERPRISE_VERSION"
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit 0
