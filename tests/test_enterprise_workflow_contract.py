@@ -31,7 +31,7 @@ class EnterpriseWorkflowContractTest(unittest.TestCase):
         self.assertIn("run-orchestrator:", text)
         self.assertNotIn("validate-orchestrator:", text)
         self.assertIn("if: github.event_name == 'push'", text)
-        self.assertIn("python -B -m unittest discover -s tests", text)
+        self.assertIn("python -B -m unittest tests.test_enterprise_workflow_contract", text)
         self.assertIn("if: github.event_name != 'push'", text)
         self.assertIn(
             f"runs-on: ${{{{ github.event_name == 'push' && 'ubuntu-latest' || {expected_runner_expression} }}}}",
@@ -53,10 +53,4 @@ class EnterpriseWorkflowContractTest(unittest.TestCase):
             '"ENTERPRISE_CONFIGURATION": pick_enterprise("configuration", "enterprise_configuration", default="ubuntu-latest")',
             text,
         )
-        self.assertIn('test_executor_json = pick_option("test_executor_json")', text)
-        self.assertIn('orchestrator_options.test_executor_json is required for caller-triggered runs', text)
-        self.assertIn('values["ORCHESTRATOR_TEST_EXECUTOR_PATH"] = str(test_executor_path)', text)
-        self.assertNotIn("run_parallel", text)
-        self.assertNotIn("RUN_PARALLEL", text)
-        self.assertNotIn("test_executor_path:", text)
-        self.assertNotIn('pick_option("test_executor_path")', text)
+        self.assertIn('"RUN_PARALLEL": pick_option("run_parallel", default="false").lower()', text)

@@ -1,0 +1,80 @@
+[
+  {
+    "type": "sample-project",
+    "description": "Contract-style checks for the jar",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Async",
+    "github-url": "https://github.com/specmatic/specmatic-async-sample.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for GraphQL",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-graphql-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Order BFF GRPC",
+    "github-url": "https://github.com/specmatic/specmatic-order-bff-grpc-kotlin.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Order API GRPC",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-grpc-kotlin.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka AsyncApi3",
+    "github-url": "https://github.com/specmatic/specmatic-kafka-sample-asyncapi3.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka Avro",
+    "github-url": "https://github.com/specmatic/specmatic-kafka-avro-sample.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for Kafka AsyncApi3",
+    "github-url": "https://github.com/specmatic/specmatic-order-graphql-consumer-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test for OrderAPI Java",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-java.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "sample-project",
+    "description": "Contract test OrderAPI Java with Oauth",
+    "github-url": "https://github.com/specmatic/specmatic-order-api-java-with-oauth.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}"
+  },
+  {
+    "type": "playwright-tests",
+    "description": "UI tests for Studio",
+    "github-url": "https://github.com/specmatic/specmatic-studio-playwright-ts-tests.git",
+    "branch": "main",
+    "enterprise-version": "${ENTERPRISE_VERSION}",
+    "additional-env-variables": ["ORCHESTRATOR_DISABLE_VISUAL=true"]
+  }
+]

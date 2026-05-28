@@ -96,10 +96,8 @@ class BridgeCallbackTest(unittest.TestCase):
             server = _CallbackServer(("127.0.0.1", 0), expected_requests=2)
             server.run_payload = {
                 "id": 202,
-                "status": "completed",
                 "created_at": "2026-05-08T00:00:00Z",
                 "updated_at": "2026-05-08T00:10:15Z",
-                "completed_at": "2026-05-08T00:10:15Z",
             }
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -204,10 +202,8 @@ class BridgeCallbackTest(unittest.TestCase):
             server = _CallbackServer(("127.0.0.1", 0), expected_requests=2)
             server.run_payload = {
                 "id": 202,
-                "status": "completed",
                 "created_at": "2026-05-08T00:00:00Z",
                 "updated_at": "2026-05-08T00:10:15Z",
-                "completed_at": "2026-05-08T00:10:15Z",
             }
             port = server.server_address[1]
             thread = threading.Thread(target=server.serve_forever, daemon=True)
