@@ -308,13 +308,13 @@ def is_enterprise_repository_selector(value: str) -> bool:
         return True
     if not is_http_url(normalized):
         return False
-    parsed = urllib.parse.urlsplit(normalized)
+    parsed = urllib.parse.urlsplit(normalize_repo_browser_url(normalized))
     path = parsed.path
     fragment = parsed.fragment
-    return (
-        parsed.netloc == "repo.specmatic.io"
-        and any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
-    )
+    if path.endswith(".jar"):
+        return any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
+
+    return any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
 
 
 def normalize_repo_browser_url(raw_url: str) -> str:
