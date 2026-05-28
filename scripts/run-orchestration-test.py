@@ -21,7 +21,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from string import Template
 from typing import Any
 
@@ -2045,6 +2045,13 @@ def tokenize_command(command: str) -> list[str]:
     return shlex.split(command, posix=os.name != "nt")
 
 
+def command_basename(command_part: str) -> str:
+    windows_name = PureWindowsPath(command_part).name
+    if windows_name != command_part:
+        return windows_name
+    return PurePosixPath(command_part).name
+
+
 def normalize_command_for_os(command: list[str], repo_dir: Path) -> list[str]:
     if not command:
         return command
@@ -2068,7 +2075,7 @@ def normalize_command_for_os(command: list[str], repo_dir: Path) -> list[str]:
     if (
         os.name == "nt"
         and len(command) >= 3
-        and Path(command[0]).stem.lower() == "npx"
+        and PureWindowsPath(command[0]).stem.lower() == "npx"
         and command[1] == "playwright"
         and command[2] == "install"
     ):
@@ -2094,7 +2101,7 @@ def normalize_command_for_os(command: list[str], repo_dir: Path) -> list[str]:
 def is_gradle_invocation(command: list[str]) -> bool:
     if not command:
         return False
-    first_name = Path(command[0]).name.lower()
+    first_name = command_basename(command[0]).lower()
     if first_name in {"gradlew", "gradlew.bat"}:
         return True
     return first_name in {"gradle", "gradle.bat"}
