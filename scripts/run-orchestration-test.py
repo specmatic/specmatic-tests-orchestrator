@@ -26,8 +26,7 @@ from string import Template
 from typing import Any
 
 
-DEFAULT_CONFIG_PATH = Path("resources/test-executor.json")
-FALLBACK_CONFIG_PATH = Path("resources/test-execution.json")
+DEFAULT_CONFIG_PATH = Path("")
 DEFAULT_WORKFLOW_GLOBS = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 DEFAULT_RESULT_PATHS = [
@@ -42,8 +41,6 @@ DEFAULT_RESULT_PATHS = [
 STATUS_PASSED = "passed"
 STATUS_FAILED = "failed"
 STATUS_COMMAND_FAILED = "command_failed"
-STATUS_CLONE_FAILED = "clone_failed"
-STATUS_CHECKOUT_FAILED = "checkout_failed"
 STATUS_MISSING_REPO_URL = "missing_repo_url"
 STATUS_NO_WORKFLOWS = "no_workflows"
 STATUS_NO_COMMANDS = "no_test_commands"
@@ -261,19 +258,17 @@ def load_default_env_files() -> None:
 def parse_args() -> argparse.Namespace:
     load_default_env_files()
     parser = argparse.ArgumentParser(description="Clone configured test repositories and run tests discovered from workflow files.")
-    parser.add_argument("--config", default="", help="Path to test executor JSON. Defaults to resources/test-executor.json.")
-    parser.add_argument("--temp-dir", default="temp", help="Directory where repositories are cloned.")
+    parser.add_argument("--config", default="", help="Path to test executor JSON.")
+    parser.add_argument("--temp-dir", default="temp", help="Temporary directory cleaned before orchestration.")
     parser.add_argument("--outputs-dir", default=os.environ.get("SPEC_OUTPUTS_DIR", "outputs"))
-    parser.add_argument("--clean", action="store_true", help="Remove existing cloned repositories before running.")
-    parser.add_argument("--dry-run", action="store_true", help="Discover commands without executing them.")
+    parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--specmatic-jar-url", default=os.environ.get("SPECMATIC_JAR_URL", ""))
     parser.add_argument("--specmatic-jar-path", default=os.environ.get("SPECMATIC_JAR_PATH", ""))
     parser.add_argument("--specmatic-version", default=os.environ.get("SPECMATIC_VERSION", ""))
     parser.add_argument("--enterprise-version", default=os.environ.get("ENTERPRISE_VERSION", ""))
     parser.add_argument("--enterprise-docker-image", default=os.environ.get("ENTERPRISE_DOCKER_IMAGE", ""))
     parser.add_argument("--snapshot-repo-url", default=os.environ.get("SNAPSHOT_REPO_URL", ""))
-    parser.add_argument("--allow-cli-installer", action="store_true", help="Allow curl/bash installer fallback for CLI matrix rows.")
-    parser.add_argument("--run-parallel", action="store_true", default=(os.environ.get("RUN_PARALLEL", "").strip().lower() in {"1", "true", "yes", "on"}), help="Dispatch discovered GitHub workflows and wait for them instead of running commands locally.")
+    parser.add_argument("--allow-cli-installer", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--parallel-poll-seconds", type=int, default=int(os.environ.get("PARALLEL_POLL_SECONDS", "30")))
     parser.add_argument("--parallel-timeout-seconds", type=int, default=int(os.environ.get("PARALLEL_TIMEOUT_SECONDS", "7200")))
     return parser.parse_args()
@@ -308,13 +303,15 @@ def is_enterprise_repository_selector(value: str) -> bool:
         return True
     if not is_http_url(normalized):
         return False
-    parsed = urllib.parse.urlsplit(normalized)
+    
+    parsed = urllib.parse.urlsplit(normalize_repo_browser_url(normalized))
     path = parsed.path
     fragment = parsed.fragment
-    return (
-        parsed.netloc == "repo.specmatic.io"
-        and any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
-    )
+
+    if path.endswith(".jar"):
+        return any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
+
+    return any(marker in path or marker in fragment for marker in ENTERPRISE_ARTIFACT_PATH_MARKERS)
 
 
 def normalize_repo_browser_url(raw_url: str) -> str:
@@ -583,9 +580,7 @@ def load_executors(config_path: Path) -> list[TestExecutor]:
 def resolve_config_path(raw_path: str) -> Path:
     if raw_path:
         return Path(raw_path)
-    if DEFAULT_CONFIG_PATH.exists():
-        return DEFAULT_CONFIG_PATH
-    return FALLBACK_CONFIG_PATH
+    return DEFAULT_CONFIG_PATH
 
 
 def handle_remove_readonly(func, path, excinfo) -> None:
@@ -649,42 +644,8 @@ def append_log(log_file: Path, message: str) -> None:
         log.write(f"{message}\n")
 
 
-def prepare_repo(executor: TestExecutor, repo_dir: Path, clean: bool, log_file: Path) -> tuple[str, str, int]:
-    if not executor.github_url:
-        return STATUS_MISSING_REPO_URL, "github-url is required", 1
-
-    if repo_dir.exists() and clean:
-        remove_tree(repo_dir)
-
-    if not (repo_dir / ".git").exists():
-        log_progress(f"    cloning {executor.github_url} -> {repo_dir}")
-        repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        command = ["git", "clone", "--depth", "1"]
-        if executor.branch:
-            command.extend(["--branch", executor.branch])
-        command.extend([executor.github_url, str(repo_dir)])
-        exit_code = run_command(command, cwd=None, env=None, log_file=log_file)
-        if exit_code != 0:
-            return STATUS_CLONE_FAILED, "git clone failed", exit_code
-    elif executor.branch:
-        log_progress(f"    checking out {executor.branch} in {repo_dir}")
-        exit_code = run_command(["git", "-C", str(repo_dir), "checkout", executor.branch], cwd=None, env=None, log_file=log_file)
-        if exit_code != 0:
-            return STATUS_CHECKOUT_FAILED, "git checkout failed", exit_code
-    else:
-        log_progress(f"    using existing checkout {repo_dir}")
-
-    return STATUS_PASSED, "repository ready", 0
 
 
-def discover_workflow_files(repo_dir: Path, executor: TestExecutor) -> list[Path]:
-    if executor.workflow_files:
-        return sorted((repo_dir / workflow_file).resolve() for workflow_file in executor.workflow_files if (repo_dir / workflow_file).is_file())
-
-    workflow_files: list[Path] = []
-    for pattern in executor.workflow_globs:
-        workflow_files.extend(repo_dir.glob(pattern))
-    return sorted(dict.fromkeys(path.resolve() for path in workflow_files if path.is_file()))
 
 
 def normalize_workflow_label(label: str) -> str:
@@ -1586,7 +1547,11 @@ def should_consider_workflow_for_execution_text(text: str, workflow_label: str) 
         input_values={},
         allow_matrix_expressions=True,
     )
-    if any(is_test_command(command.command, allow_matrix_expressions=True) for command in commands):
+    if any(
+        is_test_command(command.command, allow_matrix_expressions=True)
+        or is_playwright_test_wrapper_command(command.command, workflow_label)
+        for command in commands
+    ):
         return True
     return bool(parse_reusable_workflow_calls(lines))
 
@@ -1867,17 +1832,6 @@ def extract_run_commands(workflow_file: Path) -> list[str]:
     return [command.command for command in extract_workflow_commands(workflow_file, repo_dir)]
 
 
-def configured_workflow_commands(executor: TestExecutor) -> list[WorkflowCommand]:
-    return [
-        WorkflowCommand(
-            workflow_file="_configured",
-            step_name="configured command",
-            command=command,
-            working_directory=".",
-            needs_cli_install=False,
-        )
-        for command in executor.command
-    ]
 
 
 def is_playwright_executor(executor: TestExecutor) -> bool:
@@ -2665,306 +2619,8 @@ def classify_final_status(status: str, details: str, total_tests: int, failed_te
     return status, details
 
 
-def execute_workflow_commands(
-    executor: TestExecutor,
-    repo_dir: Path,
-    output_dir: Path,
-    log_file: Path,
-    workflow_label: str,
-    commands: list[WorkflowCommand],
-    cli_setup_config: CliSetupConfig,
-    dry_run: bool,
-    specmatic_version: str = "",
-    enterprise_version: str = "",
-    enterprise_docker_image: str = "",
-) -> tuple[str, str, int, list[CommandExecutionResult]]:
-    effective_specmatic_version = "" if is_sample_project_executor(executor) else specmatic_version
-    env = build_command_env(
-        repo_dir,
-        output_dir,
-        workflow_label,
-        executor,
-        specmatic_version=effective_specmatic_version,
-        enterprise_version=enterprise_version,
-        enterprise_docker_image=enterprise_docker_image,
-        specmatic_jar_url=cli_setup_config.jar_url,
-        specmatic_jar_path=cli_setup_config.jar_path,
-    )
-    executed: list[CommandExecutionResult] = []
-    cli_ready = False
-    failure_details: list[str] = []
-    final_exit_code = 0
-    snapshot_repo_url = cli_setup_config.snapshot_repo_url
-
-    has_gradle_command = False
-    for workflow_command in commands:
-        try:
-            has_gradle_command = has_gradle_command or is_gradle_invocation(tokenize_command(workflow_command.command))
-        except ValueError:
-            continue
-
-    if (
-        has_gradle_command
-        and not snapshot_repo_url
-        and can_prepare_enterprise_maven_repo(cli_setup_config)
-        and not dry_run
-    ):
-        ok, setup_details, jar_path = ensure_enterprise_jar_available(cli_setup_config, log_file=log_file, dry_run=dry_run)
-        if not ok and cli_setup_config.allow_installer:
-            ok, setup_details = prepare_cli_dependency(
-                cli_setup_config,
-                log_file=log_file,
-                dry_run=dry_run,
-                enterprise_version=enterprise_version,
-            )
-            jar_path = cli_jar_path() if ok else None
-        if not ok or jar_path is None:
-            details = (
-                f"could not prepare local Maven repository for "
-                f"io.specmatic.enterprise:executable:{enterprise_version} ({setup_details})"
-            )
-            return STATUS_SETUP_FAILED, details, 1, executed
-        snapshot_repo_url = write_enterprise_maven_repo(output_dir / "enterprise-maven-repo", jar_path, enterprise_version)
-        with log_file.open("a", encoding="utf-8") as log:
-            log.write(f"\n[enterprise-maven] using {snapshot_repo_url} for io.specmatic.enterprise:executable:{enterprise_version}\n")
-
-    for index, workflow_command in enumerate(commands, start=1):
-        working_dir = (repo_dir / workflow_command.working_directory).resolve()
-        log_progress(f"     [{index}/{len(commands)}] {compact_command(workflow_command.command)}")
-        if not working_dir.exists():
-            details = f"{workflow_command.workflow_file}: working directory not found: {workflow_command.working_directory}"
-            failure_details.append(details)
-            executed.append(
-                CommandExecutionResult(
-                    workflow_file=workflow_command.workflow_file,
-                    step_name=workflow_command.step_name,
-                    command=workflow_command.command,
-                    working_directory=workflow_command.working_directory,
-                    exit_code=1,
-                    duration_seconds=0,
-                )
-            )
-            final_exit_code = 1
-            log_progress(f"     failed with exit code 1; full log: {log_file}")
-            continue
-
-        if workflow_command.needs_cli_install and not cli_ready:
-            setup_started = time.time()
-            ok, setup_details = prepare_cli_dependency(
-                cli_setup_config,
-                log_file=log_file,
-                dry_run=dry_run,
-                enterprise_version=enterprise_version,
-            )
-            if not ok:
-                duration_seconds = int(time.time() - setup_started)
-                executed.append(
-                    CommandExecutionResult(
-                        workflow_file=workflow_command.workflow_file,
-                        step_name=workflow_command.step_name,
-                        command=workflow_command.command,
-                        working_directory=workflow_command.working_directory,
-                        exit_code=1,
-                        duration_seconds=duration_seconds,
-                    )
-                )
-                details = (
-                    f"{workflow_command.workflow_file}: '{workflow_command.step_name}' could not start command "
-                    f"'{workflow_command.command}' ({setup_details})"
-                )
-                failure_details.append(details)
-                final_exit_code = 1
-                log_progress(f"     failed with exit code 1; full log: {log_file}")
-                continue
-            cli_ready = True
-
-        started = time.time()
-        exit_code = 0
-        if not dry_run:
-            try:
-                tokenized = tokenize_command(workflow_command.command)
-                normalized = normalize_command_for_os(tokenized, repo_dir)
-                normalized = apply_gradle_version_overrides(
-                    normalized,
-                    specmatic_version=effective_specmatic_version,
-                    enterprise_version=enterprise_version,
-                    snapshot_repo_url=snapshot_repo_url,
-                )
-                exit_code = run_command(normalized, cwd=working_dir, env=env, log_file=log_file)
-            except ValueError as exc:
-                exit_code = 1
-                failure_details.append(
-                    f"{workflow_command.workflow_file}: unable to parse command '{workflow_command.command}' ({exc})"
-                )
-                with log_file.open("a", encoding="utf-8") as log:
-                    log.write(f"\nUnable to parse command: {workflow_command.command}\n{exc}\n")
-        else:
-            with log_file.open("a", encoding="utf-8") as log:
-                log.write(f"\n$ {workflow_command.command}\n[dry_run=true]\n")
-
-        duration_seconds = int(time.time() - started)
-        executed.append(
-            CommandExecutionResult(
-                workflow_file=workflow_command.workflow_file,
-                step_name=workflow_command.step_name,
-                command=workflow_command.command,
-                working_directory=workflow_command.working_directory,
-                exit_code=exit_code,
-                duration_seconds=duration_seconds,
-            )
-        )
-        if exit_code != 0:
-            log_progress(f"     failed with exit code {exit_code}; full log: {log_file}")
-            failure_details.append(f"{workflow_command.workflow_file}: '{workflow_command.step_name}' failed")
-            if final_exit_code == 0:
-                final_exit_code = exit_code
-
-    if failure_details:
-        details = (
-            f"{len(failure_details)} command(s) failed; "
-            + "; ".join(failure_details[:3])
-            + ("; ..." if len(failure_details) > 3 else "")
-        )
-        return STATUS_COMMAND_FAILED, details, final_exit_code or 1, executed
-
-    return STATUS_PASSED, f"executed {len(executed)} workflow test command(s)", 0, executed
 
 
-def run_workflow_command_set(
-    executor: TestExecutor,
-    repo_dir: Path,
-    outputs_dir: Path,
-    workflow_label: str,
-    commands: list[WorkflowCommand],
-    cli_setup_config: CliSetupConfig,
-    dry_run: bool,
-    specmatic_version: str = "",
-    enterprise_version: str = "",
-    enterprise_docker_image: str = "",
-) -> WorkflowResult:
-    workflow = Path(workflow_label).stem
-    output_dir = outputs_dir / executor.type / executor.name / workflow
-    log_file = output_dir / "run.log"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    log_file.write_text("", encoding="utf-8")
-
-    started_at = utc_now()
-    started = time.time()
-    log_progress(f"  -> workflow {workflow_label} ({len(commands)} runnable command{'s' if len(commands) != 1 else ''})")
-    playwright_runtime_started = False
-    playwright_jar_mode = is_playwright_jar_mode(cli_setup_config)
-    manage_shared_containers = should_cleanup_shared_containers(executor)
-    if manage_shared_containers:
-        cleanup_playwright_containers(log_file, "before")
-    if is_playwright_executor(executor):
-        log_progress("     starting playwright support services for workflow")
-        runtime_ok, runtime_details = start_playwright_support_runtime(
-            executor=executor,
-            repo_dir=repo_dir,
-            outputs_dir=outputs_dir,
-            jar_mode=playwright_jar_mode,
-            cli_setup_config=cli_setup_config,
-            dry_run=dry_run,
-        )
-        if not runtime_ok:
-            duration_seconds = int(time.time() - started)
-            finished_at = utc_now()
-            result = WorkflowResult(
-                type=executor.type,
-                repository=executor.name,
-                repo_url=executor.github_url,
-                branch=executor.branch,
-                workflow=workflow_label,
-                status=STATUS_SETUP_FAILED,
-                exit_code=1,
-                duration_seconds=duration_seconds,
-                commands=[command.command for command in commands],
-                executed_commands=[],
-                output_dir=str(output_dir),
-                log_file=str(log_file),
-                copied_result_paths=[],
-                total_tests=0,
-                failed_tests=0,
-                skipped_tests=0,
-                started_at=started_at,
-                finished_at=finished_at,
-                details=runtime_details,
-            )
-            write_json(output_dir / "result.json", asdict(result))
-            if manage_shared_containers:
-                cleanup_playwright_containers(log_file, "after")
-            return result
-        playwright_runtime_started = True
-        log_progress(f"     {runtime_details}")
-
-    status = STATUS_NO_COMMANDS
-    details = "no runnable test commands found"
-    exit_code = 1
-    executed: list[CommandExecutionResult] = []
-    copied_paths: list[str] = []
-    total_tests = 0
-    failed_tests = 0
-    skipped_tests = 0
-    try:
-        if commands:
-            clean_result_paths(repo_dir, executor.result_paths)
-            status, details, exit_code, executed = execute_workflow_commands(
-                executor=executor,
-                repo_dir=repo_dir,
-                output_dir=output_dir,
-                log_file=log_file,
-                workflow_label=workflow_label,
-                commands=commands,
-                cli_setup_config=cli_setup_config,
-                dry_run=dry_run,
-                specmatic_version=specmatic_version,
-                enterprise_version=enterprise_version,
-                enterprise_docker_image=enterprise_docker_image,
-            )
-
-        copied_paths = copy_result_paths(repo_dir, output_dir, executor.result_paths)
-        total_tests, failed_tests, skipped_tests = collect_junit_counts(repo_dir)
-        status, details = classify_final_status(status, details, total_tests, failed_tests)
-        details = enrich_failure_details_from_log(status, details, log_file)
-    finally:
-        if manage_shared_containers:
-            cleanup_playwright_containers(log_file, "after")
-        if playwright_runtime_started:
-            log_progress("     stopping playwright support services for workflow")
-            stop_playwright_support_runtime(
-                executor=executor,
-                repo_dir=repo_dir,
-                outputs_dir=outputs_dir,
-                jar_mode=playwright_jar_mode,
-            )
-
-    duration_seconds = int(time.time() - started)
-    finished_at = utc_now()
-    log_progress(f"     result: {status}; tests={total_tests}, failed={failed_tests}, skipped={skipped_tests}; output={output_dir}")
-
-    result = WorkflowResult(
-        type=executor.type,
-        repository=executor.name,
-        repo_url=executor.github_url,
-        branch=executor.branch,
-        workflow=workflow_label,
-        status=status,
-        exit_code=exit_code,
-        duration_seconds=duration_seconds,
-        commands=[command.command for command in commands],
-        executed_commands=executed,
-        output_dir=str(output_dir),
-        log_file=str(log_file),
-        copied_result_paths=copied_paths,
-        total_tests=total_tests,
-        failed_tests=failed_tests,
-        skipped_tests=skipped_tests,
-        started_at=started_at,
-        finished_at=finished_at,
-        details=details,
-    )
-    write_json(output_dir / "result.json", asdict(result))
-    return result
 
 
 def synthetic_result(
@@ -3068,85 +2724,7 @@ def profiled_result(executor: TestExecutor, outputs_dir: Path) -> WorkflowResult
 
 def run_executor(
     executor: TestExecutor,
-    temp_dir: Path,
     outputs_dir: Path,
-    clean: bool,
-    cli_setup_config: CliSetupConfig,
-    dry_run: bool,
-    specmatic_version: str = "",
-    enterprise_version: str = "",
-    enterprise_docker_image: str = "",
-) -> list[WorkflowResult]:
-    if should_skip_playwright_executor(executor):
-        details = (
-            "skipped Playwright executor on windows enterprise configuration; "
-            "Playwright workflows are dispatched by the ubuntu enterprise configuration run"
-        )
-        log_progress(f"    {details}")
-        return [synthetic_result(executor, outputs_dir, "_skipped", STATUS_SKIPPED, details, 0)]
-
-    if executor.result_profile is not None:
-        log_progress(f"    using synthetic result profile for {executor.type}/{executor.name}")
-        return [profiled_result(executor, outputs_dir)]
-
-    repo_dir = temp_dir / executor.type / executor.name
-    setup_dir = outputs_dir / executor.type / executor.name / "_setup"
-    setup_log = setup_dir / "run.log"
-    setup_dir.mkdir(parents=True, exist_ok=True)
-
-    setup_status, setup_details, setup_exit_code = prepare_repo(executor, repo_dir, clean=clean, log_file=setup_log)
-    if setup_status != STATUS_PASSED:
-        return [synthetic_result(executor, outputs_dir, "_setup", setup_status, setup_details, setup_exit_code)]
-
-    if executor.command:
-        return [
-            run_workflow_command_set(
-                executor=executor,
-                repo_dir=repo_dir,
-                outputs_dir=outputs_dir,
-                workflow_label="_configured",
-                commands=configured_workflow_commands(executor),
-                cli_setup_config=cli_setup_config,
-                dry_run=dry_run,
-                specmatic_version=specmatic_version,
-                enterprise_version=enterprise_version,
-                enterprise_docker_image=enterprise_docker_image,
-            )
-        ]
-
-    workflow_files = discover_workflow_files(repo_dir, executor)
-    log_progress(f"    discovered {len(workflow_files)} workflow file{'s' if len(workflow_files) != 1 else ''}")
-    if not workflow_files:
-        return [synthetic_result(executor, outputs_dir, "_discovery", STATUS_NO_WORKFLOWS, "no workflow files found", 1)]
-
-    results: list[WorkflowResult] = []
-    for workflow_file in workflow_files:
-        if not should_consider_workflow_for_execution(workflow_file, repo_dir):
-            continue
-        commands = select_runnable_commands(extract_workflow_commands(workflow_file, repo_dir))
-        workflow_label = str(workflow_file.resolve().relative_to(repo_dir.resolve())).replace("\\", "/")
-        results.append(
-            run_workflow_command_set(
-                executor=executor,
-                repo_dir=repo_dir,
-                outputs_dir=outputs_dir,
-                workflow_label=workflow_label,
-                commands=commands,
-                cli_setup_config=cli_setup_config,
-                dry_run=dry_run,
-                specmatic_version=specmatic_version,
-                enterprise_version=enterprise_version,
-                enterprise_docker_image=enterprise_docker_image,
-            )
-        )
-    return results
-
-
-def run_parallel_executor(
-    executor: TestExecutor,
-    temp_dir: Path,
-    outputs_dir: Path,
-    clean: bool,
     github_token: str,
     api_base_url: str,
     poll_seconds: int,
@@ -3198,7 +2776,7 @@ def parallel_executor_setup_result(executor: TestExecutor, outputs_dir: Path) ->
                 outputs_dir,
                 "_configured",
                 STATUS_SETUP_FAILED,
-                "parallel mode dispatches GitHub workflow files; configured commands require sequential mode",
+                "orchestrator dispatches GitHub workflow files; configured command-only entries are not supported",
                 1,
             )
         ]
@@ -3743,8 +3321,7 @@ def actionable_step_for_result(result: WorkflowResult) -> str:
     details = result.details.lower()
     if "does not declare workflow_dispatch" in details:
         return (
-            "Add workflow_dispatch to the target workflow, or list only dispatchable workflows in the parallel manifest. "
-            "If this workflow should run only through local command extraction, run with run_parallel=false."
+            "Add workflow_dispatch to the target workflow, or list only dispatchable workflows in the manifest."
         )
     if "workflow_dispatch failed" in details and ("404" in details or "not found" in details):
         return (
@@ -4152,9 +3729,17 @@ def main() -> int:
     config_path = resolve_config_path(args.config)
     log_progress(
         "Test executor manifest: "
-        f"requested config={args.config or 'default'}, "
+        f"requested config={args.config or 'not provided'}, "
         f"resolved path={config_path}"
     )
+    if not args.config:
+        print(
+            "No test executor manifest was provided. "
+            "Pass caller-owned test executor JSON through orchestrator_options.test_executor_json "
+            "or pass --config for local testing.",
+            file=sys.stderr,
+        )
+        return 1
     if not config_path.exists():
         print(f"Config file not found: {config_path}", file=sys.stderr)
         return 1
@@ -4198,13 +3783,6 @@ def main() -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    cli_setup_config = CliSetupConfig(
-        jar_url=args.specmatic_jar_url,
-        jar_path=args.specmatic_jar_path,
-        allow_installer=args.allow_cli_installer,
-        snapshot_repo_url=args.snapshot_repo_url,
-    )
-
     all_results: list[WorkflowResult] = []
     applied_overrides: dict[str, dict[str, str]] = {}
     parallel_github_token = (
@@ -4214,9 +3792,9 @@ def main() -> int:
         or ""
     )
     github_api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
-    if args.run_parallel and not parallel_github_token:
+    if not parallel_github_token:
         print(
-            "RUN_PARALLEL requires ORCHESTRATOR_GITHUB_TOKEN, SPECMATIC_GITHUB_TOKEN, or GITHUB_TOKEN "
+            "Specmatic orchestration requires ORCHESTRATOR_GITHUB_TOKEN, SPECMATIC_GITHUB_TOKEN, or GITHUB_TOKEN "
             "with permission to dispatch and read target repository workflow runs.",
             file=sys.stderr,
         )
@@ -4246,50 +3824,33 @@ def main() -> int:
                 f"enterprise={effective_enterprise_version or 'n/a'}, "
                 f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
             )
-        if args.run_parallel:
-            log_progress("    run_parallel=true; discovering and dispatching GitHub workflows")
-            dispatch_results, dispatched = dispatch_parallel_executor_workflows(
-                executor=executor,
-                outputs_dir=outputs_dir,
-                github_token=parallel_github_token,
-                api_base_url=github_api_base_url,
-                specmatic_version=effective_specmatic_version,
-                enterprise_version=effective_enterprise_version,
-                enterprise_docker_image=effective_enterprise_docker_image,
-                jar_url=args.specmatic_jar_url,
-                jar_path=args.specmatic_jar_path,
-            )
-            all_results.extend(dispatch_results)
-            parallel_dispatched.extend(dispatched)
-        else:
-            all_results.extend(
-                run_executor(
-                    executor,
-                    temp_dir,
-                    outputs_dir,
-                    clean=args.clean,
-                    cli_setup_config=cli_setup_config,
-                    dry_run=args.dry_run,
-                    specmatic_version=effective_specmatic_version,
-                    enterprise_version=effective_enterprise_version,
-                    enterprise_docker_image=effective_enterprise_docker_image,
-                )
-            )
-
-    if args.run_parallel:
-        all_results.extend(
-            wait_for_parallel_workflows(
-                dispatched=parallel_dispatched,
-                outputs_dir=outputs_dir,
-                github_token=parallel_github_token,
-                api_base_url=github_api_base_url,
-                poll_seconds=args.parallel_poll_seconds,
-                timeout_seconds=args.parallel_timeout_seconds,
-            )
+        log_progress("    discovering and dispatching GitHub workflows")
+        dispatch_results, dispatched = dispatch_parallel_executor_workflows(
+            executor=executor,
+            outputs_dir=outputs_dir,
+            github_token=parallel_github_token,
+            api_base_url=github_api_base_url,
+            specmatic_version=effective_specmatic_version,
+            enterprise_version=effective_enterprise_version,
+            enterprise_docker_image=effective_enterprise_docker_image,
+            jar_url=args.specmatic_jar_url,
+            jar_path=args.specmatic_jar_path,
         )
+        all_results.extend(dispatch_results)
+        parallel_dispatched.extend(dispatched)
+
+    all_results.extend(
+        wait_for_parallel_workflows(
+            dispatched=parallel_dispatched,
+            outputs_dir=outputs_dir,
+            github_token=parallel_github_token,
+            api_base_url=github_api_base_url,
+            poll_seconds=args.parallel_poll_seconds,
+            timeout_seconds=args.parallel_timeout_seconds,
+        )
+    )
 
     summary = build_summary(all_results)
-    summary["run_parallel"] = args.run_parallel
     summary["specmatic_version"] = args.specmatic_version
     summary["enterprise_version"] = args.enterprise_version
     summary["enterprise_docker_image"] = args.enterprise_docker_image

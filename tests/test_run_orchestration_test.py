@@ -356,7 +356,7 @@ on:
     def test_resolve_enterprise_version_snapshot_downloads_latest_timestamped_jar(self) -> None:
         metadata_by_url = {
             (
-                "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/"
+                "https://central.sonatype.com/repository/maven-snapshots/io/specmatic/enterprise/"
                 "executable-all/1.12.1-SNAPSHOT/maven-metadata.xml"
             ): """
 <metadata>
@@ -381,7 +381,7 @@ on:
             self.assertEqual(
                 artifact.jar_url,
                 (
-                    "https://repo.specmatic.io/snapshots/io/specmatic/enterprise/executable-all/"
+                    "https://central.sonatype.com/repository/maven-snapshots/io/specmatic/enterprise/executable-all/"
                     "1.12.1-SNAPSHOT/executable-all-1.12.1-20260427.120947-1.jar"
                 ),
             )
@@ -544,15 +544,11 @@ on:
 
             results = run_orchestration_test.run_executor(
                 executor=executor,
-                temp_dir=temp_dir / "temp",
                 outputs_dir=temp_dir / "outputs",
-                clean=True,
-                cli_setup_config=run_orchestration_test.CliSetupConfig(
-                    jar_url="https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
-                    jar_path="",
-                    allow_installer=False,
-                ),
-                dry_run=False,
+                github_token="token",
+                api_base_url="https://api.github.com",
+                poll_seconds=1,
+                timeout_seconds=1,
                 enterprise_version="0.0.0-DUMMY",
             )
 
@@ -1125,11 +1121,9 @@ jobs: {}
         try:
             run_orchestration_test.os.environ["ENTERPRISE_CONFIGURATION"] = "windows-latest"
             with workspace_temp_dir() as temp_dir:
-                results = run_orchestration_test.run_parallel_executor(
+                results = run_orchestration_test.run_executor(
                     executor=executor,
-                    temp_dir=temp_dir / "temp",
                     outputs_dir=temp_dir / "outputs",
-                    clean=False,
                     github_token="token",
                     api_base_url="https://api.github.com",
                     poll_seconds=1,
@@ -1237,60 +1231,6 @@ jobs: {}
 
             self.assertIn(workflow.name.lower(), run_orchestration_test.SKIPPED_WORKFLOW_FILE_NAMES)
 
-    def test_run_workflow_command_set_cleans_playwright_containers_before_and_after(self) -> None:
-        with workspace_temp_dir() as temp_dir:
-            repo_dir = temp_dir / "repo"
-            repo_dir.mkdir(parents=True, exist_ok=True)
-            outputs_dir = temp_dir / "out"
-            outputs_dir.mkdir(parents=True, exist_ok=True)
-            executor = run_orchestration_test.TestExecutor(
-                type="playwright",
-                github_url="https://example.com/repo.git",
-                name="repo",
-                branch="main",
-                description="",
-                workflow_globs=[],
-                workflow_files=[],
-                command=[],
-                result_paths=[],
-            )
-            command = run_orchestration_test.WorkflowCommand(
-                workflow_file=".github/workflows/playwright-openapi-contract.yml",
-                step_name="Run Playwright tests",
-                command="npx playwright test specs/openapi/execute-contract-tests",
-                working_directory=".",
-                needs_cli_install=False,
-            )
-
-            phases: list[str] = []
-            original_cleanup = run_orchestration_test.cleanup_playwright_containers
-            original_execute = run_orchestration_test.execute_workflow_commands
-            try:
-                run_orchestration_test.cleanup_playwright_containers = lambda log_file, phase: phases.append(phase)
-                run_orchestration_test.execute_workflow_commands = lambda **kwargs: (
-                    run_orchestration_test.STATUS_PASSED,
-                    "ok",
-                    0,
-                    [],
-                )
-                run_orchestration_test.run_workflow_command_set(
-                    executor=executor,
-                    repo_dir=repo_dir,
-                    outputs_dir=outputs_dir,
-                    workflow_label=".github/workflows/playwright-openapi-contract.yml",
-                    commands=[command],
-                    cli_setup_config=run_orchestration_test.CliSetupConfig(
-                        jar_url="",
-                        jar_path="",
-                        allow_installer=False,
-                    ),
-                    dry_run=False,
-                )
-            finally:
-                run_orchestration_test.cleanup_playwright_containers = original_cleanup
-                run_orchestration_test.execute_workflow_commands = original_execute
-
-            self.assertEqual(phases, ["before", "after"])
 
     def test_normalizes_gradle_wrapper_to_absolute_windows_path(self) -> None:
         with workspace_temp_dir() as temp_dir:
@@ -1518,122 +1458,7 @@ jobs:
             self.assertTrue((artifact_dir / "executable-1.12.1-SNAPSHOT.jar").exists())
             self.assertTrue((artifact_dir / "executable-1.12.1-SNAPSHOT.pom").exists())
 
-    def test_cli_setup_failure_reports_failing_command_details(self) -> None:
-        with workspace_temp_dir() as temp_dir:
-            repo_dir = temp_dir / "repo"
-            repo_dir.mkdir()
-            output_dir = temp_dir / "out"
-            output_dir.mkdir()
-            log_file = temp_dir / "run.log"
-            command = run_orchestration_test.WorkflowCommand(
-                workflow_file=".github/workflows/gradle.yml",
-                step_name="Run CLI Contract Test",
-                command="./gradlew test --tests=com.example.ContractTestUsingCLITest",
-                working_directory=".",
-                needs_cli_install=True,
-            )
 
-            original_prepare = run_orchestration_test.prepare_cli_dependency
-            try:
-                run_orchestration_test.prepare_cli_dependency = lambda *args, **kwargs: (False, "missing jar")
-                status, details, exit_code, executed = run_orchestration_test.execute_workflow_commands(
-                    executor=run_orchestration_test.TestExecutor(
-                        type="sample-project",
-                        github_url="https://example.com/repo.git",
-                        name="repo",
-                        branch="main",
-                        description="",
-                        workflow_globs=[],
-                        workflow_files=[],
-                        command=[],
-                        result_paths=[],
-                    ),
-                    repo_dir=repo_dir,
-                    output_dir=output_dir,
-                    log_file=log_file,
-                    workflow_label=".github/workflows/gradle.yml",
-                    commands=[command],
-                    cli_setup_config=run_orchestration_test.CliSetupConfig(
-                        jar_url="",
-                        jar_path="",
-                        allow_installer=False,
-                    ),
-                    dry_run=False,
-                )
-            finally:
-                run_orchestration_test.prepare_cli_dependency = original_prepare
-
-            self.assertEqual(status, run_orchestration_test.STATUS_COMMAND_FAILED)
-            self.assertEqual(exit_code, 1)
-            self.assertEqual(len(executed), 1)
-            self.assertEqual(executed[0].command, command.command)
-            self.assertIn(command.command, details)
-
-    def test_execute_workflow_commands_continues_after_first_failure(self) -> None:
-        with workspace_temp_dir() as temp_dir:
-            repo_dir = temp_dir / "repo"
-            repo_dir.mkdir()
-            output_dir = temp_dir / "out"
-            output_dir.mkdir()
-            log_file = temp_dir / "run.log"
-
-            commands = [
-                run_orchestration_test.WorkflowCommand(
-                    workflow_file=".github/workflows/gradle.yml",
-                    step_name="First",
-                    command="./gradlew test --tests=com.example.First",
-                    working_directory=".",
-                    needs_cli_install=False,
-                ),
-                run_orchestration_test.WorkflowCommand(
-                    workflow_file=".github/workflows/gradle.yml",
-                    step_name="Second",
-                    command="./gradlew test --tests=com.example.Second",
-                    working_directory=".",
-                    needs_cli_install=False,
-                ),
-            ]
-
-            original_run_command = run_orchestration_test.run_command
-            try:
-                run_calls = {"count": 0}
-
-                def fake_run_command(command, cwd, env, log_file):
-                    run_calls["count"] += 1
-                    return 1 if run_calls["count"] == 1 else 0
-
-                run_orchestration_test.run_command = fake_run_command
-                status, details, exit_code, executed = run_orchestration_test.execute_workflow_commands(
-                    executor=run_orchestration_test.TestExecutor(
-                        type="sample-project",
-                        github_url="https://example.com/repo.git",
-                        name="repo",
-                        branch="main",
-                        description="",
-                        workflow_globs=[],
-                        workflow_files=[],
-                        command=[],
-                        result_paths=[],
-                    ),
-                    repo_dir=repo_dir,
-                    output_dir=output_dir,
-                    log_file=log_file,
-                    workflow_label=".github/workflows/gradle.yml",
-                    commands=commands,
-                    cli_setup_config=run_orchestration_test.CliSetupConfig(
-                        jar_url="",
-                        jar_path="",
-                        allow_installer=False,
-                    ),
-                    dry_run=False,
-                )
-            finally:
-                run_orchestration_test.run_command = original_run_command
-
-            self.assertEqual(status, run_orchestration_test.STATUS_COMMAND_FAILED)
-            self.assertEqual(exit_code, 1)
-            self.assertEqual(len(executed), 2)
-            self.assertIn("command(s) failed", details)
 
     def test_classifies_command_failure_with_test_failures_as_failed(self) -> None:
         status, details = run_orchestration_test.classify_final_status(
@@ -1646,161 +1471,7 @@ jobs:
         self.assertEqual(status, run_orchestration_test.STATUS_FAILED)
         self.assertEqual(details, "test failures detected")
 
-    def test_snapshot_gradle_run_without_explicit_jar_lets_gradle_resolve_dependencies(self) -> None:
-        with workspace_temp_dir() as temp_dir:
-            repo_dir = temp_dir / "repo"
-            repo_dir.mkdir()
-            gradlew = repo_dir / "gradlew"
-            gradlew.write_text("#!/bin/sh\n", encoding="utf-8")
-            output_dir = temp_dir / "outputs"
-            log_file = output_dir / "run.log"
-            output_dir.mkdir()
-            log_file.write_text("", encoding="utf-8")
-            commands = [
-                run_orchestration_test.WorkflowCommand(
-                    workflow_file=".github/workflows/gradle.yml",
-                    step_name="Run tests",
-                    command="./gradlew test",
-                    working_directory=".",
-                    needs_cli_install=False,
-                )
-            ]
-            captured_commands: list[list[str]] = []
 
-            original_run_command = run_orchestration_test.run_command
-            original_cli_jar_path = run_orchestration_test.cli_jar_path
-            original_ensure_enterprise_jar_available = run_orchestration_test.ensure_enterprise_jar_available
-            try:
-                run_orchestration_test.cli_jar_path = lambda: temp_dir / ".specmatic" / "missing.jar"
-                run_orchestration_test.ensure_enterprise_jar_available = mock.Mock(
-                    side_effect=AssertionError("should not prepare a local Maven repo without an explicit jar source")
-                )
-
-                def fake_run_command(command, cwd, env, log_file):
-                    captured_commands.append(command)
-                    return 0
-
-                run_orchestration_test.run_command = fake_run_command
-                status, details, exit_code, executed = run_orchestration_test.execute_workflow_commands(
-                    executor=run_orchestration_test.TestExecutor(
-                        type="sample-project",
-                        github_url="https://example.com/repo.git",
-                        name="repo",
-                        branch="main",
-                        description="",
-                        workflow_globs=[],
-                        workflow_files=[],
-                        command=[],
-                        result_paths=[],
-                    ),
-                    repo_dir=repo_dir,
-                    output_dir=output_dir,
-                    log_file=log_file,
-                    workflow_label=".github/workflows/gradle.yml",
-                    commands=commands,
-                    cli_setup_config=run_orchestration_test.CliSetupConfig(
-                        jar_url="",
-                        jar_path="",
-                        allow_installer=False,
-                    ),
-                    dry_run=False,
-                    enterprise_version="1.12.1-SNAPSHOT",
-                )
-            finally:
-                run_orchestration_test.run_command = original_run_command
-                run_orchestration_test.cli_jar_path = original_cli_jar_path
-                run_orchestration_test.ensure_enterprise_jar_available = original_ensure_enterprise_jar_available
-
-            self.assertEqual(status, run_orchestration_test.STATUS_PASSED)
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(len(executed), 1)
-            self.assertEqual(len(captured_commands), 1)
-            self.assertIn("-PspecmaticEnterpriseVersion=1.12.1-SNAPSHOT", captured_commands[0])
-            self.assertIn("-PenterpriseVersion=1.12.1-SNAPSHOT", captured_commands[0])
-            self.assertFalse(any(arg.startswith("-PsnapshotRepoUrl=") for arg in captured_commands[0]))
-
-    def test_snapshot_gradle_run_with_installer_prepares_local_maven_repo(self) -> None:
-        with workspace_temp_dir() as temp_dir:
-            repo_dir = temp_dir / "repo"
-            repo_dir.mkdir()
-            gradlew = repo_dir / "gradlew"
-            gradlew.write_text("#!/bin/sh\n", encoding="utf-8")
-            output_dir = temp_dir / "outputs"
-            log_file = output_dir / "run.log"
-            output_dir.mkdir()
-            log_file.write_text("", encoding="utf-8")
-            target_jar = temp_dir / ".specmatic" / "specmatic-enterprise.jar"
-            commands = [
-                run_orchestration_test.WorkflowCommand(
-                    workflow_file=".github/workflows/gradle.yml",
-                    step_name="Run tests",
-                    command="./gradlew test",
-                    working_directory=".",
-                    needs_cli_install=False,
-                )
-            ]
-            captured_commands: list[list[str]] = []
-            installed_versions: list[str] = []
-
-            original_run_command = run_orchestration_test.run_command
-            original_cli_jar_path = run_orchestration_test.cli_jar_path
-            original_ensure_enterprise_jar_available = run_orchestration_test.ensure_enterprise_jar_available
-            try:
-                run_orchestration_test.cli_jar_path = lambda: target_jar
-
-                def fake_ensure(config, log_file, dry_run):
-                    if target_jar.exists():
-                        return True, "installed", target_jar
-                    return False, "missing", None
-
-                def fake_run_command(command, cwd, env, log_file):
-                    if command[:2] == ["bash", "-lc"]:
-                        installed_versions.append(command[2])
-                        target_jar.parent.mkdir(parents=True)
-                        with zipfile.ZipFile(target_jar, "w") as jar:
-                            jar.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")
-                        return 0
-                    captured_commands.append(command)
-                    return 0
-
-                run_orchestration_test.ensure_enterprise_jar_available = fake_ensure
-                run_orchestration_test.run_command = fake_run_command
-                status, details, exit_code, executed = run_orchestration_test.execute_workflow_commands(
-                    executor=run_orchestration_test.TestExecutor(
-                        type="sample-project",
-                        github_url="https://example.com/repo.git",
-                        name="repo",
-                        branch="main",
-                        description="",
-                        workflow_globs=[],
-                        workflow_files=[],
-                        command=[],
-                        result_paths=[],
-                    ),
-                    repo_dir=repo_dir,
-                    output_dir=output_dir,
-                    log_file=log_file,
-                    workflow_label=".github/workflows/gradle.yml",
-                    commands=commands,
-                    cli_setup_config=run_orchestration_test.CliSetupConfig(
-                        jar_url="",
-                        jar_path="",
-                        allow_installer=True,
-                    ),
-                    dry_run=False,
-                    enterprise_version="1.12.1-SNAPSHOT",
-                )
-            finally:
-                run_orchestration_test.run_command = original_run_command
-                run_orchestration_test.cli_jar_path = original_cli_jar_path
-                run_orchestration_test.ensure_enterprise_jar_available = original_ensure_enterprise_jar_available
-
-            self.assertEqual(status, run_orchestration_test.STATUS_PASSED)
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(len(executed), 1)
-            self.assertEqual(len(captured_commands), 1)
-            self.assertTrue(any("--version 1.12.1-SNAPSHOT" in command for command in installed_versions))
-            self.assertTrue(any(arg.startswith("-PsnapshotRepoUrl=") for arg in captured_commands[0]))
 
     def test_keeps_command_failed_for_non_test_execution_failures(self) -> None:
         status, details = run_orchestration_test.classify_final_status(
@@ -1913,7 +1584,7 @@ jobs:
 
         self.assertTrue(matched)
 
-    def test_run_parallel_executor_logs_dispatch_summary_and_progress_table(self) -> None:
+    def test_run_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
             executor = run_orchestration_test.TestExecutor(
                 type="playwright-tests",
@@ -1992,25 +1663,21 @@ jobs:
             def fake_sleep(seconds: int) -> None:
                 sleep_calls.append(seconds)
 
-            with mock.patch.object(run_orchestration_test, "prepare_repo") as prepare_repo, \
-                mock.patch.object(run_orchestration_test, "discover_remote_workflow_files", return_value=remote_workflows), \
+            with mock.patch.object(run_orchestration_test, "discover_remote_workflow_files", return_value=remote_workflows), \
                 mock.patch.object(run_orchestration_test, "dispatch_github_workflow", return_value=None), \
                 mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json), \
                 mock.patch.object(run_orchestration_test, "log_progress", side_effect=logs.append), \
                 mock.patch.object(run_orchestration_test.time, "time", side_effect=fake_time), \
                 mock.patch.object(run_orchestration_test.time, "sleep", side_effect=fake_sleep):
-                results = run_orchestration_test.run_parallel_executor(
+                results = run_orchestration_test.run_executor(
                     executor=executor,
-                    temp_dir=temp_dir / "temp",
                     outputs_dir=temp_dir / "outputs",
-                    clean=False,
                     github_token="token",
                     api_base_url="https://api.github.com",
                     poll_seconds=1,
                     timeout_seconds=1000,
                 )
 
-        prepare_repo.assert_not_called()
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0].status, run_orchestration_test.STATUS_PASSED)
         self.assertEqual(results[1].status, run_orchestration_test.STATUS_FAILED)
@@ -2095,7 +1762,6 @@ jobs:
                 "0.0.0-DUMMY",
                 "--specmatic-jar-url",
                 "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
-                "--run-parallel",
             ]
 
             with mock.patch.object(sys, "argv", argv), \

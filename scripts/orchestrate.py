@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.consolidate_outputs import build_summary, load_source_results, render_markdown_summary, write_summary
 
-DEFAULT_SAMPLE_EXECUTORS = ROOT / "resources" / "test-executor.json"
+DEFAULT_SAMPLE_EXECUTORS = ROOT / "tests" / "resources" / "test-executor-success.json"
 
 
 def load_event_payload() -> dict[str, Any]:
@@ -245,7 +245,7 @@ def main() -> int:
     enterprise_status_context = os.environ.get("ENTERPRISE_STATUS_CONTEXT") or pick(payload, "enterprise_status_context")
     status_token = os.environ.get("ENTERPRISE_CALLBACK_TOKEN", "")
     api_base_url = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
-    test_executor_path = os.environ.get("ORCHESTRATOR_TEST_EXECUTOR_PATH") or pick(payload, "test_executor_path")
+    test_executor_path = os.environ.get("ORCHESTRATOR_TEST_EXECUTOR_PATH", "")
 
     if not jar_url:
         raise SystemExit("SPECMATIC_JAR_URL or event payload jar_url is required")
