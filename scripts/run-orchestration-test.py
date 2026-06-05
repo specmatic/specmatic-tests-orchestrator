@@ -6,6 +6,7 @@ import argparse
 import base64
 import fnmatch
 import json
+import math
 import os
 import re
 import shlex
@@ -23,7 +24,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from string import Template
-from typing import Any
+from typing import Any, TypeVar
 
 
 DEFAULT_CONFIG_PATH = Path("")
@@ -72,6 +73,7 @@ PLAYWRIGHT_SERVICE_HEALTH_URLS = {
     "order-api": "http://127.0.0.1:8090/products",
     "order-bff": "http://127.0.0.1:8080/health",
 }
+T = TypeVar("T")
 
 TEST_KEYWORDS = (
     " test",
@@ -273,6 +275,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-cli-installer", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--parallel-poll-seconds", type=int, default=int(os.environ.get("PARALLEL_POLL_SECONDS", "30")))
     parser.add_argument("--parallel-timeout-seconds", type=int, default=int(os.environ.get("PARALLEL_TIMEOUT_SECONDS", "7200")))
+    parser.add_argument("--parallel-batch-size", type=int, default=int(os.environ.get("PARALLEL_BATCH_SIZE", "3")))
     return parser.parse_args()
 
 
@@ -319,6 +322,10 @@ def normalize_repo_browser_url(raw_url: str) -> str:
     if parsed.fragment.startswith("/"):
         return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.fragment, "", ""))
     return raw_url
+
+
+def chunked(items: list[T], batch_size: int) -> list[list[T]]:
+    return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
 
 
 def trim_url_slash(url: str) -> str:
@@ -3794,56 +3801,65 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if args.parallel_batch_size <= 0:
+        print("PARALLEL_BATCH_SIZE must be a positive integer.", file=sys.stderr)
+        return 1
 
-    parallel_dispatched: list[ParallelWorkflowRun] = []
-
-    for executor in executors:
-        effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
-        effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
-        effective_enterprise_docker_image = (
-            args.enterprise_docker_image
-            or executor.enterprise_docker_image
-            or os.environ.get("ENTERPRISE_DOCKER_IMAGE", "")
-            or os.environ.get("SPECMATIC_STUDIO_DOCKER_IMAGE", "")
+    total_batches = max(1, math.ceil(len(executors) / args.parallel_batch_size))
+    for batch_index, executor_batch in enumerate(chunked(executors, args.parallel_batch_size), start=1):
+        parallel_dispatched: list[ParallelWorkflowRun] = []
+        log_progress(
+            f"==> Starting executor batch {batch_index}/{total_batches} "
+            f"({len(executor_batch)} executor{'s' if len(executor_batch) != 1 else ''})"
         )
-        applied_overrides[f"{executor.type}/{executor.name}"] = {
-            "specmatic_version": effective_specmatic_version,
-            "enterprise_version": effective_enterprise_version,
-            "enterprise_docker_image": effective_enterprise_docker_image,
-        }
-        log_progress(f"==> Running {executor.type}/{executor.name}")
-        if effective_specmatic_version or effective_enterprise_version or effective_enterprise_docker_image:
-            log_progress(
-                "    resolved overrides: "
-                f"specmatic={effective_specmatic_version or 'n/a'}, "
-                f"enterprise={effective_enterprise_version or 'n/a'}, "
-                f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
+
+        for executor in executor_batch:
+            effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
+            effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
+            effective_enterprise_docker_image = (
+                args.enterprise_docker_image
+                or executor.enterprise_docker_image
+                or os.environ.get("ENTERPRISE_DOCKER_IMAGE", "")
+                or os.environ.get("SPECMATIC_STUDIO_DOCKER_IMAGE", "")
             )
-        log_progress("    discovering and dispatching GitHub workflows")
-        dispatch_results, dispatched = dispatch_parallel_executor_workflows(
-            executor=executor,
-            outputs_dir=outputs_dir,
-            github_token=parallel_github_token,
-            api_base_url=github_api_base_url,
-            specmatic_version=effective_specmatic_version,
-            enterprise_version=effective_enterprise_version,
-            enterprise_docker_image=effective_enterprise_docker_image,
-            jar_url=args.specmatic_jar_url,
-            jar_path=args.specmatic_jar_path,
-        )
-        all_results.extend(dispatch_results)
-        parallel_dispatched.extend(dispatched)
+            applied_overrides[f"{executor.type}/{executor.name}"] = {
+                "specmatic_version": effective_specmatic_version,
+                "enterprise_version": effective_enterprise_version,
+                "enterprise_docker_image": effective_enterprise_docker_image,
+            }
+            log_progress(f"==> Running {executor.type}/{executor.name}")
+            if effective_specmatic_version or effective_enterprise_version or effective_enterprise_docker_image:
+                log_progress(
+                    "    resolved overrides: "
+                    f"specmatic={effective_specmatic_version or 'n/a'}, "
+                    f"enterprise={effective_enterprise_version or 'n/a'}, "
+                    f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
+                )
+            log_progress("    discovering and dispatching GitHub workflows")
+            dispatch_results, dispatched = dispatch_parallel_executor_workflows(
+                executor=executor,
+                outputs_dir=outputs_dir,
+                github_token=parallel_github_token,
+                api_base_url=github_api_base_url,
+                specmatic_version=effective_specmatic_version,
+                enterprise_version=effective_enterprise_version,
+                enterprise_docker_image=effective_enterprise_docker_image,
+                jar_url=args.specmatic_jar_url,
+                jar_path=args.specmatic_jar_path,
+            )
+            all_results.extend(dispatch_results)
+            parallel_dispatched.extend(dispatched)
 
-    all_results.extend(
-        wait_for_parallel_workflows(
-            dispatched=parallel_dispatched,
-            outputs_dir=outputs_dir,
-            github_token=parallel_github_token,
-            api_base_url=github_api_base_url,
-            poll_seconds=args.parallel_poll_seconds,
-            timeout_seconds=args.parallel_timeout_seconds,
+        all_results.extend(
+            wait_for_parallel_workflows(
+                dispatched=parallel_dispatched,
+                outputs_dir=outputs_dir,
+                github_token=parallel_github_token,
+                api_base_url=github_api_base_url,
+                poll_seconds=args.parallel_poll_seconds,
+                timeout_seconds=args.parallel_timeout_seconds,
+            )
         )
-    )
 
     summary = build_summary(all_results)
     summary["specmatic_version"] = args.specmatic_version

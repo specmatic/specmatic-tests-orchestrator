@@ -1694,7 +1694,7 @@ jobs:
         self.assertIn("beta", combined_logs)
         self.assertIn(5, sleep_calls)
 
-    def test_main_dispatches_all_parallel_executors_before_waiting(self) -> None:
+    def test_main_dispatches_parallel_executors_in_batches_before_waiting(self) -> None:
         with workspace_temp_dir() as temp_dir:
             config_path = temp_dir / "test-executor.json"
             outputs_dir = temp_dir / "outputs"
@@ -1712,6 +1712,18 @@ jobs:
                             "type": "sample-project",
                             "name": "repo-b",
                             "github-url": "https://github.com/specmatic/repo-b.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-c",
+                            "github-url": "https://github.com/specmatic/repo-c.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-d",
+                            "github-url": "https://github.com/specmatic/repo-d.git",
                             "branch": "main",
                         },
                     ]
@@ -1735,8 +1747,7 @@ jobs:
                 ]
 
             def fake_wait(dispatched, outputs_dir, **_kwargs):
-                events.append("wait")
-                self.assertEqual([item.executor.name for item in dispatched], ["repo-a", "repo-b"])
+                events.append(f"wait:{','.join(item.executor.name for item in dispatched if item.executor is not None)}")
                 return [
                     run_orchestration_test.synthetic_result(
                         item.executor,
@@ -1760,6 +1771,8 @@ jobs:
                 str(outputs_dir),
                 "--enterprise-version",
                 "0.0.0-DUMMY",
+                "--parallel-batch-size",
+                "3",
                 "--specmatic-jar-url",
                 "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
             ]
@@ -1772,7 +1785,17 @@ jobs:
                 exit_code = run_orchestration_test.main()
 
             self.assertEqual(exit_code, 0)
-            self.assertEqual(events, ["dispatch:repo-a", "dispatch:repo-b", "wait"])
+            self.assertEqual(
+                events,
+                [
+                    "dispatch:repo-a",
+                    "dispatch:repo-b",
+                    "dispatch:repo-c",
+                    "wait:repo-a,repo-b,repo-c",
+                    "dispatch:repo-d",
+                    "wait:repo-d",
+                ],
+            )
 
     def test_workflow_result_from_github_run_downloads_artifacts_and_counts_junit(self) -> None:
         with workspace_temp_dir() as temp_dir:
