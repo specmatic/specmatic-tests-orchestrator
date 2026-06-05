@@ -948,9 +948,10 @@ def workflow_dispatch_inputs_for(
     jar_url: str,
     jar_path: str,
     orchestrator_disable_visual: str = "",
+    orchestrator_run_suffix_override: str = "",
 ) -> dict[str, str]:
     github_run_number = os.environ.get("GITHUB_RUN_NUMBER", "")
-    orchestrator_run_suffix = f"Orchestrator #{github_run_number}" if github_run_number else ""
+    orchestrator_run_suffix = orchestrator_run_suffix_override or (f"Orchestrator #{github_run_number}" if github_run_number else "")
     candidates = {
         "specmatic_version": specmatic_version,
         "enterprise_version": enterprise_version,
@@ -1055,23 +1056,18 @@ def workflow_run_matches_dispatch(
     dispatched_after: datetime,
     expected_run_title_fragment: str = "",
 ) -> bool:
-    if expected_run_title_fragment:
-        display_title = str(run.get("display_title") or run.get("name") or "")
-        if expected_run_title_fragment.lower() in display_title.lower():
-            return True
-
-        created_at = str(run.get("created_at") or "")
-        try:
-            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        except ValueError:
-            return False
-        return created >= dispatched_after
-
     created_at = str(run.get("created_at") or "")
     try:
         created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     except ValueError:
         return False
+
+    if expected_run_title_fragment:
+        display_title = str(run.get("display_title") or run.get("name") or "")
+        if expected_run_title_fragment.lower() not in display_title.lower():
+            return False
+        return created >= dispatched_after
+
     return created.timestamp() >= dispatched_after.timestamp() - WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS
 
 
@@ -2936,6 +2932,7 @@ def dispatch_inputs_for_remote_workflow(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> dict[str, str]:
     available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
     additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
@@ -2951,6 +2948,7 @@ def dispatch_inputs_for_remote_workflow(
         jar_url=jar_url,
         jar_path=jar_path,
         orchestrator_disable_visual=orchestrator_disable_visual,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
 
 
@@ -2969,6 +2967,7 @@ def dispatch_remote_workflow(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[WorkflowResult | None, ParallelWorkflowRun | None]:
     workflow_label = workflow_file.label
     inputs = dispatch_inputs_for_remote_workflow(
@@ -2979,6 +2978,7 @@ def dispatch_remote_workflow(
         enterprise_docker_image=enterprise_docker_image,
         jar_url=jar_url,
         jar_path=jar_path,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
     started_at = utc_now()
     dispatched_after = datetime.now(timezone.utc)
@@ -3038,6 +3038,7 @@ def dispatch_remote_workflows(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
     dispatch_delay_seconds = 5
     if workflow_files:
@@ -3061,6 +3062,7 @@ def dispatch_remote_workflows(
             enterprise_docker_image=enterprise_docker_image,
             jar_url=jar_url,
             jar_path=jar_path,
+            orchestrator_run_suffix_override=orchestrator_run_suffix_override,
         )
         if error_result is not None:
             dispatch_errors.append(error_result)
@@ -3201,6 +3203,7 @@ def dispatch_parallel_executor_workflows(
     enterprise_docker_image: str = "",
     jar_url: str = "",
     jar_path: str = "",
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
     setup_results = parallel_executor_setup_result(executor, outputs_dir)
     if setup_results is not None:
@@ -3238,6 +3241,7 @@ def dispatch_parallel_executor_workflows(
         enterprise_docker_image=enterprise_docker_image,
         jar_url=jar_url,
         jar_path=jar_path,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
     return discovery_results + non_dispatchable_results + dispatch_errors, dispatched
 
@@ -3828,7 +3832,11 @@ def main() -> int:
 
     total_batches = max(1, math.ceil(len(executors) / args.parallel_batch_size))
     for batch_index, executor_batch in enumerate(chunked(executors, args.parallel_batch_size), start=1):
-        def run_executor_batch(batch_executors: list[TestExecutor], batch_label: str) -> list[WorkflowResult]:
+        def run_executor_batch(
+            batch_executors: list[TestExecutor],
+            batch_label: str,
+            retry_attempt: int = 0,
+        ) -> list[WorkflowResult]:
             parallel_dispatched: list[ParallelWorkflowRun] = []
             current_batch_results: list[WorkflowResult] = []
             log_progress(
@@ -3869,6 +3877,11 @@ def main() -> int:
                     enterprise_docker_image=effective_enterprise_docker_image,
                     jar_url=args.specmatic_jar_url,
                     jar_path=args.specmatic_jar_path,
+                    orchestrator_run_suffix_override=(
+                        f"Orchestrator #{os.environ.get('GITHUB_RUN_NUMBER', '')} retry {retry_attempt}"
+                        if retry_attempt and os.environ.get("GITHUB_RUN_NUMBER")
+                        else ""
+                    ),
                 )
                 current_batch_results.extend(dispatch_results)
                 parallel_dispatched.extend(dispatched)
@@ -3909,7 +3922,7 @@ def main() -> int:
             f"from batch {batch_index}/{total_batches} after {retry_delay}s jitter"
         )
         time.sleep(retry_delay)
-        all_results.extend(run_executor_batch(retry_executors, f"{batch_index}/{total_batches} retry"))
+        all_results.extend(run_executor_batch(retry_executors, f"{batch_index}/{total_batches} retry", retry_attempt=1))
 
     summary = build_summary(all_results)
     summary["specmatic_version"] = args.specmatic_version

@@ -139,6 +139,19 @@ class RunOrchestrationTest(unittest.TestCase):
             },
         )
 
+    def test_workflow_dispatch_inputs_uses_suffix_override_when_present(self) -> None:
+        inputs = run_orchestration_test.workflow_dispatch_inputs_for(
+            available_inputs={"orchestrator_run_suffix"},
+            specmatic_version="",
+            enterprise_version="",
+            enterprise_docker_image="",
+            jar_url="",
+            jar_path="",
+            orchestrator_run_suffix_override="Orchestrator #150 retry 1",
+        )
+
+        self.assertEqual(inputs, {"orchestrator_run_suffix": "Orchestrator #150 retry 1"})
+
     def test_extract_workflow_dispatch_inputs(self) -> None:
         with workspace_temp_dir() as temp_dir:
             workflow = temp_dir / "workflow.yml"
@@ -1573,7 +1586,7 @@ jobs:
         )
         run = {
             "display_title": "Studio OpenAPI Generate Dictionary - Orchestrator #150",
-            "created_at": "2026-05-07T09:59:40Z",
+            "created_at": "2026-05-07T10:00:10Z",
         }
 
         matched = run_orchestration_test.workflow_run_matches_dispatch(
@@ -1583,6 +1596,29 @@ jobs:
         )
 
         self.assertTrue(matched)
+
+    def test_workflow_run_match_rejects_stale_title_match_before_dispatch_time(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+        run = {
+            "display_title": "Run tests - Orchestrator #150 retry 1",
+            "created_at": "2026-05-07T09:59:40Z",
+        }
+
+        matched = run_orchestration_test.workflow_run_matches_dispatch(
+            run,
+            dispatched_after,
+            expected_run_title_fragment="Orchestrator #150 retry 1",
+        )
+
+        self.assertFalse(matched)
 
     def test_run_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
