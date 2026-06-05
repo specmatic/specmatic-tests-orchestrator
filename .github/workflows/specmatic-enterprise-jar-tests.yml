@@ -65,6 +65,8 @@ jobs:
       SPECMATIC_LICENSE_KEY: ${{ secrets.SPECMATIC_LICENSE_KEY }}
       ORCHESTRATOR_DISABLE_VISUAL: "true"
       PARALLEL_BATCH_SIZE: "3"
+      PARALLEL_RETRY_DELAY_SECONDS: "60"
+      PARALLEL_RETRY_JITTER_SECONDS: "30"
     steps:
       - name: Checkout orchestrator
         uses: actions/checkout@v5
