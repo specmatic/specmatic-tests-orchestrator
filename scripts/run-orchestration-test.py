@@ -6,7 +6,9 @@ import argparse
 import base64
 import fnmatch
 import json
+import math
 import os
+import random
 import re
 import shlex
 import shutil
@@ -23,7 +25,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from string import Template
-from typing import Any
+from typing import Any, TypeVar
 
 
 DEFAULT_CONFIG_PATH = Path("")
@@ -72,6 +74,7 @@ PLAYWRIGHT_SERVICE_HEALTH_URLS = {
     "order-api": "http://127.0.0.1:8090/products",
     "order-bff": "http://127.0.0.1:8080/health",
 }
+T = TypeVar("T")
 
 TEST_KEYWORDS = (
     " test",
@@ -273,6 +276,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-cli-installer", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--parallel-poll-seconds", type=int, default=int(os.environ.get("PARALLEL_POLL_SECONDS", "30")))
     parser.add_argument("--parallel-timeout-seconds", type=int, default=int(os.environ.get("PARALLEL_TIMEOUT_SECONDS", "7200")))
+    parser.add_argument("--parallel-batch-size", type=int, default=int(os.environ.get("PARALLEL_BATCH_SIZE", "3")))
+    parser.add_argument("--parallel-retry-delay-seconds", type=int, default=int(os.environ.get("PARALLEL_RETRY_DELAY_SECONDS", "60")))
+    parser.add_argument("--parallel-retry-jitter-seconds", type=int, default=int(os.environ.get("PARALLEL_RETRY_JITTER_SECONDS", "30")))
     return parser.parse_args()
 
 
@@ -319,6 +325,25 @@ def normalize_repo_browser_url(raw_url: str) -> str:
     if parsed.fragment.startswith("/"):
         return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.fragment, "", ""))
     return raw_url
+
+
+def chunked(items: list[T], batch_size: int) -> list[list[T]]:
+    return [items[index:index + batch_size] for index in range(0, len(items), batch_size)]
+
+
+def executor_key(executor: TestExecutor) -> tuple[str, str]:
+    return executor.name, executor.github_url
+
+
+def workflow_result_matches_executor(result: WorkflowResult, executor: TestExecutor) -> bool:
+    return result.repository == executor.name and result.repo_url == executor.github_url
+
+
+def should_retry_executor_results(results: list[WorkflowResult]) -> bool:
+    if not results:
+        return False
+    retryable_statuses = {STATUS_FAILED, STATUS_SETUP_FAILED, STATUS_STARTUP_FAILURE}
+    return any(result.status in retryable_statuses and result.total_tests == 0 for result in results)
 
 
 def trim_url_slash(url: str) -> str:
@@ -945,9 +970,10 @@ def workflow_dispatch_inputs_for(
     jar_url: str,
     jar_path: str,
     orchestrator_disable_visual: str = "",
+    orchestrator_run_suffix_override: str = "",
 ) -> dict[str, str]:
     github_run_number = os.environ.get("GITHUB_RUN_NUMBER", "")
-    orchestrator_run_suffix = f"Orchestrator #{github_run_number}" if github_run_number else ""
+    orchestrator_run_suffix = orchestrator_run_suffix_override or (f"Orchestrator #{github_run_number}" if github_run_number else "")
     candidates = {
         "specmatic_version": specmatic_version,
         "enterprise_version": enterprise_version,
@@ -1052,23 +1078,18 @@ def workflow_run_matches_dispatch(
     dispatched_after: datetime,
     expected_run_title_fragment: str = "",
 ) -> bool:
-    if expected_run_title_fragment:
-        display_title = str(run.get("display_title") or run.get("name") or "")
-        if expected_run_title_fragment.lower() in display_title.lower():
-            return True
-
-        created_at = str(run.get("created_at") or "")
-        try:
-            created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        except ValueError:
-            return False
-        return created >= dispatched_after
-
     created_at = str(run.get("created_at") or "")
     try:
         created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     except ValueError:
         return False
+
+    if expected_run_title_fragment:
+        display_title = str(run.get("display_title") or run.get("name") or "")
+        if expected_run_title_fragment.lower() not in display_title.lower():
+            return False
+        return created >= dispatched_after
+
     return created.timestamp() >= dispatched_after.timestamp() - WORKFLOW_RUN_DISCOVERY_CLOCK_SKEW_SECONDS
 
 
@@ -2933,6 +2954,7 @@ def dispatch_inputs_for_remote_workflow(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> dict[str, str]:
     available_inputs = extract_workflow_dispatch_inputs_from_text(workflow_file.text)
     additional_env_map = parse_additional_env_variables(executor.additional_env_variables)
@@ -2948,6 +2970,7 @@ def dispatch_inputs_for_remote_workflow(
         jar_url=jar_url,
         jar_path=jar_path,
         orchestrator_disable_visual=orchestrator_disable_visual,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
 
 
@@ -2966,6 +2989,7 @@ def dispatch_remote_workflow(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[WorkflowResult | None, ParallelWorkflowRun | None]:
     workflow_label = workflow_file.label
     inputs = dispatch_inputs_for_remote_workflow(
@@ -2976,6 +3000,7 @@ def dispatch_remote_workflow(
         enterprise_docker_image=enterprise_docker_image,
         jar_url=jar_url,
         jar_path=jar_path,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
     started_at = utc_now()
     dispatched_after = datetime.now(timezone.utc)
@@ -3035,6 +3060,7 @@ def dispatch_remote_workflows(
     enterprise_docker_image: str,
     jar_url: str,
     jar_path: str,
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
     dispatch_delay_seconds = 5
     if workflow_files:
@@ -3058,6 +3084,7 @@ def dispatch_remote_workflows(
             enterprise_docker_image=enterprise_docker_image,
             jar_url=jar_url,
             jar_path=jar_path,
+            orchestrator_run_suffix_override=orchestrator_run_suffix_override,
         )
         if error_result is not None:
             dispatch_errors.append(error_result)
@@ -3198,6 +3225,7 @@ def dispatch_parallel_executor_workflows(
     enterprise_docker_image: str = "",
     jar_url: str = "",
     jar_path: str = "",
+    orchestrator_run_suffix_override: str = "",
 ) -> tuple[list[WorkflowResult], list[ParallelWorkflowRun]]:
     setup_results = parallel_executor_setup_result(executor, outputs_dir)
     if setup_results is not None:
@@ -3235,6 +3263,7 @@ def dispatch_parallel_executor_workflows(
         enterprise_docker_image=enterprise_docker_image,
         jar_url=jar_url,
         jar_path=jar_path,
+        orchestrator_run_suffix_override=orchestrator_run_suffix_override,
     )
     return discovery_results + non_dispatchable_results + dispatch_errors, dispatched
 
@@ -3816,55 +3845,105 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    if args.parallel_batch_size <= 0:
+        print("PARALLEL_BATCH_SIZE must be a positive integer.", file=sys.stderr)
+        return 1
+    if args.parallel_retry_delay_seconds < 0 or args.parallel_retry_jitter_seconds < 0:
+        print("PARALLEL_RETRY_DELAY_SECONDS and PARALLEL_RETRY_JITTER_SECONDS must be non-negative integers.", file=sys.stderr)
+        return 1
 
-    parallel_dispatched: list[ParallelWorkflowRun] = []
-
-    for executor in executors:
-        effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
-        effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
-        effective_enterprise_docker_image = resolve_enterprise_docker_image_override(
-            requested_override=args.enterprise_docker_image,
-            executor_override=executor.enterprise_docker_image,
-            enterprise_version=effective_enterprise_version,
-        )
-        applied_overrides[f"{executor.type}/{executor.name}"] = {
-            "specmatic_version": effective_specmatic_version,
-            "enterprise_version": effective_enterprise_version,
-            "enterprise_docker_image": effective_enterprise_docker_image,
-        }
-        log_progress(f"==> Running {executor.type}/{executor.name}")
-        if effective_specmatic_version or effective_enterprise_version or effective_enterprise_docker_image:
+    total_batches = max(1, math.ceil(len(executors) / args.parallel_batch_size))
+    for batch_index, executor_batch in enumerate(chunked(executors, args.parallel_batch_size), start=1):
+        def run_executor_batch(
+            batch_executors: list[TestExecutor],
+            batch_label: str,
+            retry_attempt: int = 0,
+        ) -> list[WorkflowResult]:
+            parallel_dispatched: list[ParallelWorkflowRun] = []
+            current_batch_results: list[WorkflowResult] = []
             log_progress(
-                "    resolved overrides: "
-                f"specmatic={effective_specmatic_version or 'n/a'}, "
-                f"enterprise={effective_enterprise_version or 'n/a'}, "
-                f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
+                f"==> Starting executor batch {batch_label} "
+                f"({len(batch_executors)} executor{'s' if len(batch_executors) != 1 else ''})"
             )
-        log_progress("    discovering and dispatching GitHub workflows")
-        dispatch_results, dispatched = dispatch_parallel_executor_workflows(
-            executor=executor,
-            outputs_dir=outputs_dir,
-            github_token=parallel_github_token,
-            api_base_url=github_api_base_url,
-            specmatic_version=effective_specmatic_version,
-            enterprise_version=effective_enterprise_version,
-            enterprise_docker_image=effective_enterprise_docker_image,
-            jar_url=args.specmatic_jar_url,
-            jar_path=args.specmatic_jar_path,
-        )
-        all_results.extend(dispatch_results)
-        parallel_dispatched.extend(dispatched)
 
-    all_results.extend(
-        wait_for_parallel_workflows(
-            dispatched=parallel_dispatched,
-            outputs_dir=outputs_dir,
-            github_token=parallel_github_token,
-            api_base_url=github_api_base_url,
-            poll_seconds=args.parallel_poll_seconds,
-            timeout_seconds=args.parallel_timeout_seconds,
+            for executor in batch_executors:
+                effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
+                effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
+                effective_enterprise_docker_image = resolve_enterprise_docker_image_override(
+                    requested_override=args.enterprise_docker_image,
+                    executor_override=executor.enterprise_docker_image,
+                    enterprise_version=effective_enterprise_version,
+                )
+                applied_overrides[f"{executor.type}/{executor.name}"] = {
+                    "specmatic_version": effective_specmatic_version,
+                    "enterprise_version": effective_enterprise_version,
+                    "enterprise_docker_image": effective_enterprise_docker_image,
+                }
+                log_progress(f"==> Running {executor.type}/{executor.name}")
+                if effective_specmatic_version or effective_enterprise_version or effective_enterprise_docker_image:
+                    log_progress(
+                        "    resolved overrides: "
+                        f"specmatic={effective_specmatic_version or 'n/a'}, "
+                        f"enterprise={effective_enterprise_version or 'n/a'}, "
+                        f"enterprise_docker_image={effective_enterprise_docker_image or 'n/a'}"
+                    )
+                log_progress("    discovering and dispatching GitHub workflows")
+                dispatch_results, dispatched = dispatch_parallel_executor_workflows(
+                    executor=executor,
+                    outputs_dir=outputs_dir,
+                    github_token=parallel_github_token,
+                    api_base_url=github_api_base_url,
+                    specmatic_version=effective_specmatic_version,
+                    enterprise_version=effective_enterprise_version,
+                    enterprise_docker_image=effective_enterprise_docker_image,
+                    jar_url=args.specmatic_jar_url,
+                    jar_path=args.specmatic_jar_path,
+                    orchestrator_run_suffix_override=(
+                        f"Orchestrator #{os.environ.get('GITHUB_RUN_NUMBER', '')} retry {retry_attempt}"
+                        if retry_attempt and os.environ.get("GITHUB_RUN_NUMBER")
+                        else ""
+                    ),
+                )
+                current_batch_results.extend(dispatch_results)
+                parallel_dispatched.extend(dispatched)
+
+            current_batch_results.extend(
+                wait_for_parallel_workflows(
+                    dispatched=parallel_dispatched,
+                    outputs_dir=outputs_dir,
+                    github_token=parallel_github_token,
+                    api_base_url=github_api_base_url,
+                    poll_seconds=args.parallel_poll_seconds,
+                    timeout_seconds=args.parallel_timeout_seconds,
+                )
+            )
+            return current_batch_results
+
+        batch_results: list[WorkflowResult] = run_executor_batch(executor_batch, f"{batch_index}/{total_batches}")
+        retry_executors = [
+            executor for executor in executor_batch
+            if should_retry_executor_results([result for result in batch_results if workflow_result_matches_executor(result, executor)])
+        ]
+
+        if not retry_executors:
+            all_results.extend(batch_results)
+            continue
+
+        retry_keys = {executor_key(executor) for executor in retry_executors}
+        all_results.extend(
+            [
+                result for result in batch_results
+                if (result.repository, result.repo_url) not in retry_keys
+            ]
         )
-    )
+
+        retry_delay = args.parallel_retry_delay_seconds + random.randint(0, args.parallel_retry_jitter_seconds)
+        log_progress(
+            f"==> Retrying {len(retry_executors)} executor{'s' if len(retry_executors) != 1 else ''} "
+            f"from batch {batch_index}/{total_batches} after {retry_delay}s jitter"
+        )
+        time.sleep(retry_delay)
+        all_results.extend(run_executor_batch(retry_executors, f"{batch_index}/{total_batches} retry", retry_attempt=1))
 
     summary = build_summary(all_results)
     summary["specmatic_version"] = args.specmatic_version

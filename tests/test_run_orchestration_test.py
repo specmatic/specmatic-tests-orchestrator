@@ -141,6 +141,19 @@ class RunOrchestrationTest(unittest.TestCase):
             },
         )
 
+    def test_workflow_dispatch_inputs_uses_suffix_override_when_present(self) -> None:
+        inputs = run_orchestration_test.workflow_dispatch_inputs_for(
+            available_inputs={"orchestrator_run_suffix"},
+            specmatic_version="",
+            enterprise_version="",
+            enterprise_docker_image="",
+            jar_url="",
+            jar_path="",
+            orchestrator_run_suffix_override="Orchestrator #150 retry 1",
+        )
+
+        self.assertEqual(inputs, {"orchestrator_run_suffix": "Orchestrator #150 retry 1"})
+
     def test_extract_workflow_dispatch_inputs(self) -> None:
         with workspace_temp_dir() as temp_dir:
             workflow = temp_dir / "workflow.yml"
@@ -1609,7 +1622,7 @@ jobs:
         )
         run = {
             "display_title": "Studio OpenAPI Generate Dictionary - Orchestrator #150",
-            "created_at": "2026-05-07T09:59:40Z",
+            "created_at": "2026-05-07T10:00:10Z",
         }
 
         matched = run_orchestration_test.workflow_run_matches_dispatch(
@@ -1619,6 +1632,29 @@ jobs:
         )
 
         self.assertTrue(matched)
+
+    def test_workflow_run_match_rejects_stale_title_match_before_dispatch_time(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+        run = {
+            "display_title": "Run tests - Orchestrator #150 retry 1",
+            "created_at": "2026-05-07T09:59:40Z",
+        }
+
+        matched = run_orchestration_test.workflow_run_matches_dispatch(
+            run,
+            dispatched_after,
+            expected_run_title_fragment="Orchestrator #150 retry 1",
+        )
+
+        self.assertFalse(matched)
 
     def test_run_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
@@ -1730,7 +1766,110 @@ jobs:
         self.assertIn("beta", combined_logs)
         self.assertIn(5, sleep_calls)
 
-    def test_main_dispatches_all_parallel_executors_before_waiting(self) -> None:
+    def test_main_dispatches_parallel_executors_in_batches_before_waiting(self) -> None:
+        with workspace_temp_dir() as temp_dir:
+            config_path = temp_dir / "test-executor.json"
+            outputs_dir = temp_dir / "outputs"
+            temp_repo_dir = temp_dir / "temp"
+            config_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "type": "sample-project",
+                            "name": "repo-a",
+                            "github-url": "https://github.com/specmatic/repo-a.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-b",
+                            "github-url": "https://github.com/specmatic/repo-b.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-c",
+                            "github-url": "https://github.com/specmatic/repo-c.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-d",
+                            "github-url": "https://github.com/specmatic/repo-d.git",
+                            "branch": "main",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            events: list[str] = []
+
+            def fake_dispatch(executor, outputs_dir, **_kwargs):
+                events.append(f"dispatch:{executor.name}")
+                return [], [
+                    run_orchestration_test.ParallelWorkflowRun(
+                        workflow_label=".github/workflows/gradle.yml",
+                        started_at=run_orchestration_test.utc_now(),
+                        dispatched_after=run_orchestration_test.datetime.now(run_orchestration_test.timezone.utc),
+                        ref="main",
+                        dispatch_started_monotonic=0.0,
+                        executor=executor,
+                        repo_slug=f"specmatic/{executor.name}",
+                    )
+                ]
+
+            def fake_wait(dispatched, outputs_dir, **_kwargs):
+                events.append(f"wait:{','.join(item.executor.name for item in dispatched if item.executor is not None)}")
+                return [
+                    run_orchestration_test.synthetic_result(
+                        item.executor,
+                        outputs_dir,
+                        "gradle",
+                        run_orchestration_test.STATUS_PASSED,
+                        "ok",
+                        0,
+                    )
+                    for item in dispatched
+                    if item.executor is not None
+                ]
+
+            argv = [
+                "run-orchestration-test.py",
+                "--config",
+                str(config_path),
+                "--temp-dir",
+                str(temp_repo_dir),
+                "--outputs-dir",
+                str(outputs_dir),
+                "--enterprise-version",
+                "0.0.0-DUMMY",
+                "--parallel-batch-size",
+                "3",
+                "--specmatic-jar-url",
+                "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
+            ]
+
+            with mock.patch.object(sys, "argv", argv), \
+                mock.patch.dict(os.environ, {"ORCHESTRATOR_GITHUB_TOKEN": "token"}, clear=False), \
+                mock.patch.object(run_orchestration_test, "dispatch_parallel_executor_workflows", side_effect=fake_dispatch), \
+                mock.patch.object(run_orchestration_test, "wait_for_parallel_workflows", side_effect=fake_wait), \
+                mock.patch.object(run_orchestration_test, "log_progress"):
+                exit_code = run_orchestration_test.main()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(
+                events,
+                [
+                    "dispatch:repo-a",
+                    "dispatch:repo-b",
+                    "dispatch:repo-c",
+                    "wait:repo-a,repo-b,repo-c",
+                    "dispatch:repo-d",
+                    "wait:repo-d",
+                ],
+            )
+
+    def test_main_retries_failed_zero_test_executor_once_after_jitter(self) -> None:
         with workspace_temp_dir() as temp_dir:
             config_path = temp_dir / "test-executor.json"
             outputs_dir = temp_dir / "outputs"
@@ -1755,6 +1894,7 @@ jobs:
                 encoding="utf-8",
             )
             events: list[str] = []
+            wait_calls = 0
 
             def fake_dispatch(executor, outputs_dir, **_kwargs):
                 events.append(f"dispatch:{executor.name}")
@@ -1771,19 +1911,37 @@ jobs:
                 ]
 
             def fake_wait(dispatched, outputs_dir, **_kwargs):
-                events.append("wait")
-                self.assertEqual([item.executor.name for item in dispatched], ["repo-a", "repo-b"])
+                nonlocal wait_calls
+                wait_calls += 1
+                events.append(f"wait:{','.join(item.executor.name for item in dispatched if item.executor is not None)}")
+                if wait_calls == 1:
+                    return [
+                        run_orchestration_test.synthetic_result(
+                            dispatched[0].executor,
+                            outputs_dir,
+                            "gradle",
+                            run_orchestration_test.STATUS_FAILED,
+                            "GitHub Actions workflow_dispatch concluded with failure",
+                            1,
+                        ),
+                        run_orchestration_test.synthetic_result(
+                            dispatched[1].executor,
+                            outputs_dir,
+                            "gradle",
+                            run_orchestration_test.STATUS_PASSED,
+                            "ok",
+                            0,
+                        ),
+                    ]
                 return [
                     run_orchestration_test.synthetic_result(
-                        item.executor,
+                        dispatched[0].executor,
                         outputs_dir,
                         "gradle",
                         run_orchestration_test.STATUS_PASSED,
                         "ok",
                         0,
                     )
-                    for item in dispatched
-                    if item.executor is not None
                 ]
 
             argv = [
@@ -1796,6 +1954,12 @@ jobs:
                 str(outputs_dir),
                 "--enterprise-version",
                 "0.0.0-DUMMY",
+                "--parallel-batch-size",
+                "3",
+                "--parallel-retry-delay-seconds",
+                "10",
+                "--parallel-retry-jitter-seconds",
+                "0",
                 "--specmatic-jar-url",
                 "https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar",
             ]
@@ -1804,11 +1968,22 @@ jobs:
                 mock.patch.dict(os.environ, {"ORCHESTRATOR_GITHUB_TOKEN": "token"}, clear=False), \
                 mock.patch.object(run_orchestration_test, "dispatch_parallel_executor_workflows", side_effect=fake_dispatch), \
                 mock.patch.object(run_orchestration_test, "wait_for_parallel_workflows", side_effect=fake_wait), \
+                mock.patch.object(run_orchestration_test.time, "sleep") as mocked_sleep, \
                 mock.patch.object(run_orchestration_test, "log_progress"):
                 exit_code = run_orchestration_test.main()
 
             self.assertEqual(exit_code, 0)
-            self.assertEqual(events, ["dispatch:repo-a", "dispatch:repo-b", "wait"])
+            self.assertEqual(
+                events,
+                [
+                    "dispatch:repo-a",
+                    "dispatch:repo-b",
+                    "wait:repo-a,repo-b",
+                    "dispatch:repo-a",
+                    "wait:repo-a",
+                ],
+            )
+            mocked_sleep.assert_called_once_with(10)
 
     def test_workflow_result_from_github_run_downloads_artifacts_and_counts_junit(self) -> None:
         with workspace_temp_dir() as temp_dir:

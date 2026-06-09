@@ -83,7 +83,7 @@ flowchart TD
 
 ## Parallel Execution
 
-The orchestrator always runs target workflows in parallel. It does not clone target repositories for workflow discovery. Instead, it reads each target repo's `.github/workflows` directory through the GitHub Contents API, filters workflows based on the caller-owned manifest, keeps only workflows that declare `workflow_dispatch`, dispatches all of them, waits for the resulting GitHub Actions runs, downloads artifacts, and then writes the consolidated summary.
+The orchestrator dispatches target workflows in configurable batches. By default it dispatches up to 3 configured target repositories at a time, waits for those GitHub Actions runs to finish, then moves to the next batch. If a dispatched executor fails before producing any test counts, the orchestrator waits for a short jittered delay and retries that executor once. It does not clone target repositories for workflow discovery. Instead, it reads each target repo's `.github/workflows` directory through the GitHub Contents API, filters workflows based on the caller-owned manifest, keeps only workflows that declare `workflow_dispatch`, dispatches each batch, waits for the resulting GitHub Actions runs, downloads artifacts, and then writes the consolidated summary.
 
 ```mermaid
 flowchart TD
