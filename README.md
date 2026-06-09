@@ -125,7 +125,7 @@ on:
 
 If a workflow does not declare `workflow_dispatch`, the orchestrator reports it separately as `setup_failed` with an actionable step telling you to add `workflow_dispatch` or narrow the manifest to dispatchable workflows.
 
-For docker-based test suites, target workflows can optionally declare `enterprise_docker_image` and forward it to the runtime. This lets the orchestrator tell Testcontainers or Docker Compose exactly which image to use without exposing snapshot-selection logic inside repository test code.
+For docker-based test suites, target workflows can optionally declare `enterprise_docker_image` and forward it to the runtime. This lets the orchestrator tell Testcontainers or Docker Compose exactly which image to use without exposing snapshot-selection logic inside repository test code. When no explicit docker image override is provided and the resolved Enterprise version is a snapshot, the orchestrator now defaults to the value in `ENTEPRISE_SNAPSHOT_DOCKER_IMAGE` and falls back to `specmatic/enterprise-snapshot`.
 
 ## Triggering The Orchestrator
 

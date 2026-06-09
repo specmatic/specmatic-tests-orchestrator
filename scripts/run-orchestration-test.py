@@ -433,6 +433,28 @@ def resolve_enterprise_artifact_inputs(enterprise_version: str, jar_url: str, ja
     return resolve_enterprise_artifact_selector(enterprise_version)
 
 
+def default_snapshot_docker_image() -> str:
+    return (
+        os.environ.get("ENTEPRISE_SNAPSHOT_DOCKER_IMAGE", "")
+        or os.environ.get("ENTERPRISE_SNAPSHOT_DOCKER_IMAGE", "")
+        or "specmatic/enterprise-snapshot"
+    )
+
+
+def resolve_enterprise_docker_image_override(
+    requested_override: str,
+    executor_override: str,
+    enterprise_version: str,
+) -> str:
+    return (
+        requested_override
+        or executor_override
+        or os.environ.get("ENTERPRISE_DOCKER_IMAGE", "")
+        or os.environ.get("SPECMATIC_STUDIO_DOCKER_IMAGE", "")
+        or (default_snapshot_docker_image() if enterprise_version.endswith("-SNAPSHOT") else "")
+    )
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -3800,11 +3822,10 @@ def main() -> int:
     for executor in executors:
         effective_specmatic_version = args.specmatic_version or executor.specmatic_version or os.environ.get("SPECMATIC_VERSION", "")
         effective_enterprise_version = args.enterprise_version or executor.enterprise_version or os.environ.get("ENTERPRISE_VERSION", "")
-        effective_enterprise_docker_image = (
-            args.enterprise_docker_image
-            or executor.enterprise_docker_image
-            or os.environ.get("ENTERPRISE_DOCKER_IMAGE", "")
-            or os.environ.get("SPECMATIC_STUDIO_DOCKER_IMAGE", "")
+        effective_enterprise_docker_image = resolve_enterprise_docker_image_override(
+            requested_override=args.enterprise_docker_image,
+            executor_override=executor.enterprise_docker_image,
+            enterprise_version=effective_enterprise_version,
         )
         applied_overrides[f"{executor.type}/{executor.name}"] = {
             "specmatic_version": effective_specmatic_version,

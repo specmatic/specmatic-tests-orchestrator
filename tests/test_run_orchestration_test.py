@@ -485,6 +485,40 @@ on:
         finally:
             run_orchestration_test.read_remote_text = original_read_remote_text
 
+    def test_resolve_enterprise_docker_image_override_uses_snapshot_default_for_snapshot_versions(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ["ENTEPRISE_SNAPSHOT_DOCKER_IMAGE"] = "specmatic/enterprise-snapshot"
+
+            docker_image = run_orchestration_test.resolve_enterprise_docker_image_override(
+                requested_override="",
+                executor_override="",
+                enterprise_version="1.12.1-SNAPSHOT",
+            )
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+        self.assertEqual(docker_image, "specmatic/enterprise-snapshot")
+
+    def test_resolve_enterprise_docker_image_override_keeps_release_runs_unset(self) -> None:
+        original_env = run_orchestration_test.os.environ.copy()
+        try:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ["ENTEPRISE_SNAPSHOT_DOCKER_IMAGE"] = "specmatic/enterprise-snapshot"
+
+            docker_image = run_orchestration_test.resolve_enterprise_docker_image_override(
+                requested_override="",
+                executor_override="",
+                enterprise_version="1.12.0",
+            )
+        finally:
+            run_orchestration_test.os.environ.clear()
+            run_orchestration_test.os.environ.update(original_env)
+
+        self.assertEqual(docker_image, "")
+
     def test_main_logs_enterprise_artifact_resolution(self) -> None:
         with workspace_temp_dir() as temp_dir:
             config = temp_dir / "test-executor.json"
