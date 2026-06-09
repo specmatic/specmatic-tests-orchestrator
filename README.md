@@ -18,6 +18,7 @@ For caller-triggered runs, the workflow expects:
 
 - `orchestrator_options.test_executor_json`: required caller-owned manifest content. The workflow writes it to a temporary file before running tests.
 - `orchestrator_options.jar_url`: optional direct jar URL; if omitted, `enterprise_options.version` is resolved by the orchestrator.
+- `orchestrator_options.enterprise_docker_image`: optional docker image override for docker-based test runs. Use this when an orchestrated run should exercise a snapshot or other non-default image.
 - `enterprise_options.version`: Enterprise selector under test. Supported values include `1.12.1-SNAPSHOT`, `SNAPSHOT`, `RELEASE`, an Enterprise repository URL, or a direct Enterprise jar URL. Blank is invalid.
 - `enterprise_options.repository`: caller repository to update, for example `specmatic/enterprise`.
 - `enterprise_options.sha`: caller commit SHA that should receive the status update.
@@ -112,6 +113,9 @@ on:
       enterprise_version:
         required: false
         type: string
+      enterprise_docker_image:
+        required: false
+        type: string
       enterprise_artifact_url:
         required: false
         type: string
@@ -120,6 +124,8 @@ on:
 ```
 
 If a workflow does not declare `workflow_dispatch`, the orchestrator reports it separately as `setup_failed` with an actionable step telling you to add `workflow_dispatch` or narrow the manifest to dispatchable workflows.
+
+For docker-based test suites, target workflows can optionally declare `enterprise_docker_image` and forward it to the runtime. This lets the orchestrator tell Testcontainers or Docker Compose exactly which image to use without exposing snapshot-selection logic inside repository test code.
 
 ## Triggering The Orchestrator
 

@@ -111,6 +111,7 @@ class RunOrchestrationTest(unittest.TestCase):
             inputs = run_orchestration_test.workflow_dispatch_inputs_for(
                 available_inputs={
                     "enterprise_version",
+                    "enterprise_docker_image",
                     "specmatic_jar_url",
                     "enterprise_artifact_url",
                     "enterprise_jar_url",
@@ -131,6 +132,7 @@ class RunOrchestrationTest(unittest.TestCase):
             inputs,
             {
                 "enterprise_version": "1.2.3-SNAPSHOT",
+                "enterprise_docker_image": "specmatic/studio:test",
                 "specmatic_jar_url": "https://example.com/specmatic.jar",
                 "enterprise_artifact_url": "https://example.com/specmatic.jar",
                 "enterprise_jar_url": "https://example.com/specmatic.jar",
