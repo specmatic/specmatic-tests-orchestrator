@@ -202,15 +202,15 @@ on:
             self.assertTrue(run_orchestration_test.has_workflow_dispatch_trigger(inline))
             self.assertFalse(run_orchestration_test.has_workflow_dispatch_trigger(push_only))
 
-    def test_error_summary_includes_actionable_steps_for_non_dispatchable_workflow(self) -> None:
+    def test_non_dispatchable_workflow_is_reported_as_skipped_without_failing_summary(self) -> None:
         result = run_orchestration_test.WorkflowResult(
             type="sample-project",
             repository="contract-tests",
             repo_url="https://github.com/specmatic/specmatic-order-bff-java.git",
             branch="main",
             workflow=".github/workflows/gradle.yml",
-            status=run_orchestration_test.STATUS_SETUP_FAILED,
-            exit_code=1,
+            status=run_orchestration_test.STATUS_SKIPPED,
+            exit_code=0,
             duration_seconds=0,
             commands=[],
             executed_commands=[],
@@ -227,12 +227,10 @@ on:
 
         summary = run_orchestration_test.build_summary([result])
 
-        self.assertEqual(summary["error_summary"][0]["repository"], "sample-project/contract-tests")
-        self.assertIn("Add workflow_dispatch", summary["error_summary"][0]["action"])
+        self.assertEqual(summary["conclusion"], "success")
+        self.assertEqual(summary["failed_count"], 0)
+        self.assertEqual(summary["error_summary"], [])
         self.assertEqual(len(summary["non_dispatchable_workflows"]), 1)
-        rendered = run_orchestration_test.render_error_summary(summary["error_summary"])
-        self.assertIn("Error Summary and Actionable Steps", rendered)
-        self.assertIn("Action: Add workflow_dispatch", rendered)
         main_table = run_orchestration_test.render_summary_table(
             run_orchestration_test.dispatchable_results([result])
         )
@@ -1833,7 +1831,7 @@ jobs:
                 ],
             )
 
-    def test_main_retries_failed_zero_test_executor_once_after_jitter(self) -> None:
+    def test_main_retries_failed_zero_test_executor_once_after_all_batches_finish(self) -> None:
         with workspace_temp_dir() as temp_dir:
             config_path = temp_dir / "test-executor.json"
             outputs_dir = temp_dir / "outputs"
@@ -1851,6 +1849,12 @@ jobs:
                             "type": "sample-project",
                             "name": "repo-b",
                             "github-url": "https://github.com/specmatic/repo-b.git",
+                            "branch": "main",
+                        },
+                        {
+                            "type": "sample-project",
+                            "name": "repo-c",
+                            "github-url": "https://github.com/specmatic/repo-c.git",
                             "branch": "main",
                         },
                     ]
@@ -1897,6 +1901,17 @@ jobs:
                             0,
                         ),
                     ]
+                if wait_calls == 2:
+                    return [
+                        run_orchestration_test.synthetic_result(
+                            dispatched[0].executor,
+                            outputs_dir,
+                            "gradle",
+                            run_orchestration_test.STATUS_PASSED,
+                            "ok",
+                            0,
+                        )
+                    ]
                 return [
                     run_orchestration_test.synthetic_result(
                         dispatched[0].executor,
@@ -1919,7 +1934,7 @@ jobs:
                 "--enterprise-version",
                 "0.0.0-DUMMY",
                 "--parallel-batch-size",
-                "3",
+                "2",
                 "--parallel-retry-delay-seconds",
                 "10",
                 "--parallel-retry-jitter-seconds",
@@ -1943,6 +1958,8 @@ jobs:
                     "dispatch:repo-a",
                     "dispatch:repo-b",
                     "wait:repo-a,repo-b",
+                    "dispatch:repo-c",
+                    "wait:repo-c",
                     "dispatch:repo-a",
                     "wait:repo-a",
                 ],
@@ -2303,8 +2320,8 @@ jobs:
                 repo_url="https://example.com/repo-b.git",
                 branch="main",
                 workflow=".github/workflows/playwright-async-spec.yml",
-                status=run_orchestration_test.STATUS_SETUP_FAILED,
-                exit_code=1,
+                status=run_orchestration_test.STATUS_SKIPPED,
+                exit_code=0,
                 duration_seconds=0,
                 commands=[],
                 executed_commands=[],
