@@ -1033,21 +1033,31 @@ def find_dispatched_workflow_run_once(
     expected_run_title_fragment: str = "",
 ) -> dict[str, Any] | None:
     workflow_id = workflow_id_for_api(workflow_label)
-    query = urllib.parse.urlencode(
-        {
-            "event": "workflow_dispatch",
-            "branch": branch,
-            "per_page": "20",
-        }
-    )
-    payload = github_api_json(
-        "GET",
-        f"{api_base_url}/repos/{repo_slug}/actions/workflows/{workflow_id}/runs?{query}",
-        token,
-    )
-    for run in payload.get("workflow_runs", []):
-        if workflow_run_matches_dispatch(run, dispatched_after, expected_run_title_fragment):
-            return run
+    timestamp_fallback_match: dict[str, Any] | None = None
+    for page in range(1, 6):
+        query = urllib.parse.urlencode(
+            {
+                "event": "workflow_dispatch",
+                "branch": branch,
+                "per_page": "20",
+                "page": str(page),
+            }
+        )
+        payload = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{repo_slug}/actions/workflows/{workflow_id}/runs?{query}",
+            token,
+        )
+        workflow_runs = payload.get("workflow_runs", [])
+        if not workflow_runs:
+            break
+        for run in workflow_runs:
+            if workflow_run_matches_dispatch(run, dispatched_after, expected_run_title_fragment):
+                return run
+            if expected_run_title_fragment and timestamp_fallback_match is None and workflow_run_matches_dispatch(run, dispatched_after):
+                timestamp_fallback_match = run
+    if timestamp_fallback_match is not None:
+        return timestamp_fallback_match
     return None
 
 

@@ -1618,6 +1618,124 @@ jobs:
 
         self.assertFalse(matched)
 
+    def test_find_dispatched_workflow_run_falls_back_to_timestamp_when_title_suffix_is_missing(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+
+        def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+            if "page=1" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "id": 321,
+                            "display_title": "Run tests",
+                            "created_at": "2026-05-07T10:00:10Z",
+                        }
+                    ]
+                }
+            return {"workflow_runs": []}
+
+        with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json):
+            run = run_orchestration_test.find_dispatched_workflow_run_once(
+                repo_slug="specmatic/repo",
+                workflow_label=".github/workflows/gradle.yml",
+                branch="main",
+                dispatched_after=dispatched_after,
+                token="token",
+                api_base_url="https://api.github.com",
+                expected_run_title_fragment="Orchestrator #150",
+            )
+
+        self.assertIsNotNone(run)
+        self.assertEqual(run["id"], 321)
+
+    def test_find_dispatched_workflow_run_paginates_beyond_first_page(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+        requested_urls: list[str] = []
+
+        def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+            requested_urls.append(url)
+            if "page=1" in url:
+                return {"workflow_runs": []}
+            raise AssertionError(f"Unexpected GitHub API url: {url}")
+
+        with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json):
+            run = run_orchestration_test.find_dispatched_workflow_run_once(
+                repo_slug="specmatic/repo",
+                workflow_label=".github/workflows/gradle.yml",
+                branch="main",
+                dispatched_after=dispatched_after,
+                token="token",
+                api_base_url="https://api.github.com",
+                expected_run_title_fragment="Orchestrator #150",
+            )
+
+        self.assertIsNone(run)
+        self.assertEqual(len(requested_urls), 1)
+
+    def test_find_dispatched_workflow_run_returns_match_from_later_page(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+
+        def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+            if "page=1" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "id": 101,
+                            "display_title": "Older run",
+                            "created_at": "2026-05-07T09:00:00Z",
+                        }
+                    ]
+                }
+            if "page=2" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "id": 202,
+                            "display_title": "Run tests - Orchestrator #150",
+                            "created_at": "2026-05-07T10:00:10Z",
+                        }
+                    ]
+                }
+            return {"workflow_runs": []}
+
+        with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json):
+            run = run_orchestration_test.find_dispatched_workflow_run_once(
+                repo_slug="specmatic/repo",
+                workflow_label=".github/workflows/gradle.yml",
+                branch="main",
+                dispatched_after=dispatched_after,
+                token="token",
+                api_base_url="https://api.github.com",
+                expected_run_title_fragment="Orchestrator #150",
+            )
+
+        self.assertIsNotNone(run)
+        self.assertEqual(run["id"], 202)
+
     def test_run_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:
             executor = run_orchestration_test.TestExecutor(
