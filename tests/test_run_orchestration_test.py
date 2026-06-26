@@ -1686,7 +1686,7 @@ jobs:
             )
 
         self.assertIsNone(run)
-        self.assertEqual(len(requested_urls), 1)
+        self.assertEqual(len(requested_urls), 2)
 
     def test_find_dispatched_workflow_run_returns_match_from_later_page(self) -> None:
         dispatched_after = run_orchestration_test.datetime(
@@ -1735,6 +1735,94 @@ jobs:
 
         self.assertIsNotNone(run)
         self.assertEqual(run["id"], 202)
+
+    def test_find_dispatched_workflow_run_falls_back_to_repository_runs_when_workflow_runs_miss(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+
+        def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+            if "/actions/workflows/gradle.yml/runs" in url:
+                return {"workflow_runs": []}
+            if "/actions/runs?" in url and "page=1" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "id": 404,
+                            "path": ".github/workflows/gradle.yml",
+                            "display_title": "Run tests - Orchestrator #150",
+                            "created_at": "2026-05-07T10:00:10Z",
+                        }
+                    ]
+                }
+            return {"workflow_runs": []}
+
+        with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json):
+            run = run_orchestration_test.find_dispatched_workflow_run_once(
+                repo_slug="specmatic/repo",
+                workflow_label=".github/workflows/gradle.yml",
+                branch="main",
+                dispatched_after=dispatched_after,
+                token="token",
+                api_base_url="https://api.github.com",
+                expected_run_title_fragment="Orchestrator #150",
+            )
+
+        self.assertIsNotNone(run)
+        self.assertEqual(run["id"], 404)
+
+    def test_find_dispatched_workflow_run_repository_fallback_filters_by_workflow_file(self) -> None:
+        dispatched_after = run_orchestration_test.datetime(
+            2026,
+            5,
+            7,
+            10,
+            0,
+            0,
+            tzinfo=run_orchestration_test.timezone.utc,
+        )
+
+        def fake_github_api_json(method: str, url: str, token: str, payload=None, ok_statuses=None):
+            if "/actions/workflows/gradle.yml/runs" in url:
+                return {"workflow_runs": []}
+            if "/actions/runs?" in url and "page=1" in url:
+                return {
+                    "workflow_runs": [
+                        {
+                            "id": 111,
+                            "path": ".github/workflows/other.yml",
+                            "display_title": "Run tests - Orchestrator #150",
+                            "created_at": "2026-05-07T10:00:10Z",
+                        },
+                        {
+                            "id": 222,
+                            "path": ".github/workflows/gradle.yml",
+                            "display_title": "Run tests - Orchestrator #150",
+                            "created_at": "2026-05-07T10:00:12Z",
+                        }
+                    ]
+                }
+            return {"workflow_runs": []}
+
+        with mock.patch.object(run_orchestration_test, "github_api_json", side_effect=fake_github_api_json):
+            run = run_orchestration_test.find_dispatched_workflow_run_once(
+                repo_slug="specmatic/repo",
+                workflow_label=".github/workflows/gradle.yml",
+                branch="main",
+                dispatched_after=dispatched_after,
+                token="token",
+                api_base_url="https://api.github.com",
+                expected_run_title_fragment="Orchestrator #150",
+            )
+
+        self.assertIsNotNone(run)
+        self.assertEqual(run["id"], 222)
 
     def test_run_executor_logs_dispatch_summary_and_progress_table(self) -> None:
         with workspace_temp_dir() as temp_dir:

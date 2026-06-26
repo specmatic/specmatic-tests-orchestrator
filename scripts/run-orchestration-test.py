@@ -1033,14 +1033,27 @@ def find_dispatched_workflow_run_once(
     expected_run_title_fragment: str = "",
 ) -> dict[str, Any] | None:
     workflow_id = workflow_id_for_api(workflow_label)
-    timestamp_fallback_match: dict[str, Any] | None = None
-    for page in range(1, 6):
+
+    def find_match_from_runs(run_fetcher: Any) -> dict[str, Any] | None:
+        timestamp_fallback_match: dict[str, Any] | None = None
+        for page in range(1, 6):
+            workflow_runs = run_fetcher(page)
+            if not workflow_runs:
+                break
+            for run in workflow_runs:
+                if workflow_run_matches_dispatch(run, dispatched_after, expected_run_title_fragment):
+                    return run
+                if expected_run_title_fragment and timestamp_fallback_match is None and workflow_run_matches_dispatch(run, dispatched_after):
+                    timestamp_fallback_match = run
+        return timestamp_fallback_match
+
+    def fetch_workflow_runs(page: int) -> list[dict[str, Any]]:
         query = urllib.parse.urlencode(
             {
                 "event": "workflow_dispatch",
                 "branch": branch,
                 "per_page": "20",
-                "page": str(page),
+                "page": str(page)
             }
         )
         payload = github_api_json(
@@ -1048,17 +1061,34 @@ def find_dispatched_workflow_run_once(
             f"{api_base_url}/repos/{repo_slug}/actions/workflows/{workflow_id}/runs?{query}",
             token,
         )
+        return payload.get("workflow_runs", [])
+
+    workflow_match = find_match_from_runs(fetch_workflow_runs)
+    if workflow_match is not None:
+        return workflow_match
+
+    def fetch_repository_runs(page: int) -> list[dict[str, Any]]:
+        query = urllib.parse.urlencode(
+            {
+                "event": "workflow_dispatch",
+                "branch": branch,
+                "per_page": "20",
+                "page": str(page)
+            }
+        )
+        payload = github_api_json(
+            "GET",
+            f"{api_base_url}/repos/{repo_slug}/actions/runs?{query}",
+            token,
+        )
         workflow_runs = payload.get("workflow_runs", [])
-        if not workflow_runs:
-            break
-        for run in workflow_runs:
-            if workflow_run_matches_dispatch(run, dispatched_after, expected_run_title_fragment):
-                return run
-            if expected_run_title_fragment and timestamp_fallback_match is None and workflow_run_matches_dispatch(run, dispatched_after):
-                timestamp_fallback_match = run
-    if timestamp_fallback_match is not None:
-        return timestamp_fallback_match
-    return None
+        workflow_file_name = Path(workflow_label).name.lower()
+        return [
+            run for run in workflow_runs
+            if str(run.get("path") or "").lower().endswith(workflow_file_name)
+        ]
+
+    return find_match_from_runs(fetch_repository_runs)
 
 
 def workflow_run_matches_dispatch(
